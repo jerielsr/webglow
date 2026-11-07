@@ -14,7 +14,7 @@ export interface WebglowConfig {
 
 function parsePort(value: string | undefined): number {
   if (value === undefined || value === '') {
-    return 3000;
+    return 1828;
   }
 
   const port = Number(value);

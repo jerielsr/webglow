@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${WEBGLOW_PORT:-3000}:3000"
+      - "${WEBGLOW_PORT:-1828}:1828"
     environment:
       # Set this in a local .env file or Portainer stack variable before deployment.
       WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"

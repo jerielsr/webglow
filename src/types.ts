@@ -30,6 +30,7 @@ export interface CreateLightInput {
 }
 
 export interface LightPatch {
+  name?: string;
   on?: boolean;
   brightness?: number;
   color?: string;

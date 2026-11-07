@@ -146,6 +146,7 @@ export class LightStore {
       );
     }
 
+    const nextName = patch.name ?? current.name;
     const nextState: LightState = {
       ...current.state,
       ...(patch.on === undefined ? {} : { on: patch.on }),
@@ -160,6 +161,7 @@ export class LightStore {
     }
 
     const changed =
+      nextName !== current.name ||
       nextState.on !== current.state.on ||
       nextState.brightness !== current.state.brightness ||
       nextState.color !== current.state.color ||
@@ -172,6 +174,7 @@ export class LightStore {
 
     const next: LightResource = {
       ...current,
+      name: nextName,
       state: nextState,
       revision: current.revision + 1,
       updatedAt: new Date().toISOString(),
@@ -189,9 +192,33 @@ export class LightStore {
     return result;
   }
 
+  async remove(id: string): Promise<LightResource | undefined> {
+    const current = this.lights.get(id);
+    if (!current) {
+      return undefined;
+    }
+
+    this.lights.delete(id);
+    try {
+      await this.persist();
+    } catch (error) {
+      this.lights.set(id, current);
+      throw error;
+    }
+
+    const result = cloneLight(current);
+    this.events.emit('deleted', result);
+    return result;
+  }
+
   onChange(listener: (light: LightResource) => void): () => void {
     this.events.on('changed', listener);
     return () => this.events.off('changed', listener);
+  }
+
+  onDelete(listener: (light: LightResource) => void): () => void {
+    this.events.on('deleted', listener);
+    return () => this.events.off('deleted', listener);
   }
 
   async close(): Promise<void> {

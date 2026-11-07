@@ -100,13 +100,16 @@ export function validateCreateLight(value: unknown): CreateLightInput {
 
 export function validateLightPatch(value: unknown): LightPatch {
   const record = asRecord(value, 'The request body');
-  rejectUnknownKeys(record, ['on', 'brightness', 'color', 'pattern', 'speed', 'expectedRevision']);
+  rejectUnknownKeys(record, ['name', 'on', 'brightness', 'color', 'pattern', 'speed', 'expectedRevision']);
 
   if (Object.keys(record).length === 0) {
     throw new ApiError(400, 'invalid_request', 'Provide at least one field to update.');
   }
 
   const patch: LightPatch = {};
+  if (record.name !== undefined) {
+    patch.name = validateName(record.name);
+  }
   if (record.on !== undefined) {
     if (typeof record.on !== 'boolean') {
       throw new ApiError(400, 'invalid_request', 'on must be a boolean.', { field: 'on' });

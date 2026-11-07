@@ -47,6 +47,7 @@
   let lastRevision = null;
   let lastUpdatedAtMs = 0;
   let effectStartedAtMs = Date.now();
+  let lightDeleted = false;
   let socket = null;
   let reconnectTimer = null;
   let reconnectAttempt = 0;
@@ -58,7 +59,7 @@
   let canvasWidth = 0;
   let canvasHeight = 0;
   let devicePixelRatio = 1;
-  let connection = { state: "connecting", message: "Connecting…" };
+  let connection = { state: "initial", message: "" };
 
   const colorScratch = document.createElement("canvas");
   colorScratch.width = 1;
@@ -239,7 +240,7 @@
   }
 
   async function fetchLight() {
-    if (!lightId || restFetchInFlight) {
+    if (!lightId || restFetchInFlight || lightDeleted) {
       return;
     }
 
@@ -249,6 +250,12 @@
         headers: { Accept: "application/json" },
         cache: "no-store",
       });
+
+      if (response.status === 404) {
+        setConnection("offline", "This light has not been created. Use the WebGlow portal first.");
+        setOverlayVisible(true);
+        return;
+      }
 
       if (!response.ok) {
         throw new Error(`State request failed (${response.status})`);
@@ -269,7 +276,7 @@
   }
 
   function startRestPolling() {
-    if (restPollTimer || !lightId) {
+    if (restPollTimer || !lightId || lightDeleted) {
       return;
     }
 
@@ -308,6 +315,10 @@
   function connectSocket() {
     if (!lightId) {
       setConnection("error", "No light ID in this address");
+      return;
+    }
+
+    if (lightDeleted) {
       return;
     }
 
@@ -361,6 +372,10 @@
 
       try {
         const message = JSON.parse(event.data);
+        if (message && message.type === "light.deleted" && message.lightId === lightId) {
+          handleLightDeleted();
+          return;
+        }
         if (
           message &&
           (message.type === "state.snapshot" || message.type === "state.changed") &&
@@ -384,6 +399,9 @@
       }
 
       socket = null;
+      if (lightDeleted) {
+        return;
+      }
       startRestPolling();
       scheduleReconnect();
     });
@@ -397,7 +415,7 @@
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer || !lightId || navigator.onLine === false) {
+    if (reconnectTimer || !lightId || lightDeleted || navigator.onLine === false) {
       return;
     }
 
@@ -423,6 +441,30 @@
       socket = null;
       activeSocket.close();
     }
+  }
+
+  function handleLightDeleted() {
+    if (lightDeleted) {
+      return;
+    }
+
+    lightDeleted = true;
+    stopRestPolling();
+    clearReconnectTimer();
+    closeSocket();
+    light = {
+      ...initialLight,
+      state: { ...defaultState },
+      updatedAt: null,
+      updatedAtMs: 0,
+    };
+    lastRevision = null;
+    lastUpdatedAtMs = 0;
+    effectStartedAtMs = Date.now();
+    updateDetails();
+    stateDetailElement.textContent = "Deleted";
+    setConnection("offline", "This light was deleted in the WebGlow portal.");
+    setOverlayVisible(true);
   }
 
   function resizeCanvas() {

@@ -93,6 +93,7 @@ test('creates a light and updates its rendered state', async () => {
       method: 'PATCH',
       url: '/api/v1/lights/phone-1',
       payload: {
+        name: 'Renamed kitchen phone',
         on: true,
         brightness: 42.5,
         color: '#0aB',
@@ -103,6 +104,7 @@ test('creates a light and updates its rendered state', async () => {
     });
 
     assert.equal(updated.statusCode, 200);
+    assert.equal(updated.json().name, 'Renamed kitchen phone');
     assert.deepEqual(updated.json().state, {
       on: true,
       brightness: 42.5,
@@ -116,12 +118,27 @@ test('creates a light and updates its rendered state', async () => {
     const listed = await app.inject({ method: 'GET', url: '/api/v1/lights' });
     assert.equal(listed.statusCode, 200);
     assert.equal(listed.json().lights.length, 1);
-    assert.equal(listed.json().lights[0].name, 'Kitchen phone');
+    assert.equal(listed.json().lights[0].name, 'Renamed kitchen phone');
   });
 });
 
-test('creates a light when a display fetches its state and serves the display page', async () => {
+test('serves the portal and requires lights to be created before they can be fetched', async () => {
   await withApp(async (app) => {
+    const portal = await app.inject({ method: 'GET', url: '/' });
+    assert.equal(portal.statusCode, 200);
+    assert.match(portal.headers['content-type'], /^text\/html/);
+    assert.match(portal.body, /WebGlow portal/);
+
+    const missing = await app.inject({ method: 'GET', url: '/api/v1/lights/tablet' });
+    assert.equal(missing.statusCode, 404);
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights',
+      payload: { id: 'tablet', name: 'Living room tablet' },
+    });
+    assert.equal(created.statusCode, 201);
+
     const state = await app.inject({ method: 'GET', url: '/api/v1/lights/tablet' });
     assert.equal(state.statusCode, 200);
     assert.equal(state.json().id, 'tablet');
@@ -136,7 +153,7 @@ test('creates a light when a display fetches its state and serves the display pa
 
 test('rejects invalid updates and stale revisions', async () => {
   await withApp(async (app) => {
-    await app.inject({ method: 'GET', url: '/api/v1/lights/desk' });
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'desk' } });
 
     const invalid = await app.inject({
       method: 'PATCH',
@@ -174,6 +191,12 @@ test('protects control routes when WEBGLOW_API_TOKEN is configured', async () =>
         payload: { id: 'protected' },
       });
       assert.equal(authenticated.statusCode, 201);
+
+      const deleteWithoutToken = await app.inject({
+        method: 'DELETE',
+        url: '/api/v1/lights/protected',
+      });
+      assert.equal(deleteWithoutToken.statusCode, 401);
     },
     { apiToken: 'secret-token' },
   );
@@ -181,6 +204,13 @@ test('protects control routes when WEBGLOW_API_TOKEN is configured', async () =>
 
 test('broadcasts a snapshot and later state changes to a display websocket', async () => {
   await withApp(async (app) => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights',
+      payload: { id: 'websocket-display' },
+    });
+    assert.equal(created.statusCode, 201);
+
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
     assert.ok(address && typeof address !== 'string');
@@ -209,6 +239,18 @@ test('broadcasts a snapshot and later state changes to a display websocket', asy
     assert.equal(changed.light.state.on, true);
     assert.equal(changed.light.state.color, '#FF00AA');
     assert.equal(changed.light.state.pattern, 'rainbow');
+
+    const deletedPromise = waitForWebSocketMessage(socket);
+    const deletedResponse = await app.inject({
+      method: 'DELETE',
+      url: '/api/v1/lights/websocket-display',
+    });
+    assert.equal(deletedResponse.statusCode, 204);
+    const deleted = await deletedPromise;
+    assert.deepEqual(deleted, { type: 'light.deleted', lightId: 'websocket-display' });
+
+    const missing = await app.inject({ method: 'GET', url: '/api/v1/lights/websocket-display' });
+    assert.equal(missing.statusCode, 404);
     socket.close();
   });
 });

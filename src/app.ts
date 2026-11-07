@@ -50,6 +50,10 @@ function websocketMessage(type: 'state.snapshot' | 'state.changed', light: Light
   return JSON.stringify({ type, light });
 }
 
+function deletedWebsocketMessage(lightId: string): string {
+  return JSON.stringify({ type: 'light.deleted', lightId });
+}
+
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const config = mergeConfig(options.config);
   const store = options.store ?? new LightStore(config.dataFile);
@@ -90,7 +94,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await app.register(cors, {
     origin: config.corsOrigin,
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   await app.register(websocket);
   await app.register(fastifyStatic, {
@@ -99,18 +103,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     index: false,
   });
 
-  app.get('/', async () => ({
-    name: 'webglow',
-    apiVersion: 'v1',
-    lightsPath: '/api/v1/lights',
-    displayPathTemplate: '/display/:lightId',
-  }));
+  app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('portal.html'));
 
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   app.get('/api/v1/info', async () => ({
     name: 'webglow',
     apiVersion: 'v1',
+    portalPath: '/',
+    controllerAuthenticationRequired: Boolean(config.apiToken),
     capabilities: {
       patterns: [...PATTERNS],
       brightness: { minimum: 0, maximum: 100, unit: 'rendered-percent' },
@@ -134,7 +135,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get<{ Params: { lightId: string } }>('/api/v1/lights/:lightId', async (request) => {
     const id = validateLightId(request.params.lightId);
-    return store.ensure(id);
+    const light = await store.get(id);
+    if (!light) {
+      throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
+    }
+
+    return light;
   });
 
   app.patch<{ Params: { lightId: string }; Body: unknown }>(
@@ -152,6 +158,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       return light;
     },
   );
+
+  app.delete<{ Params: { lightId: string } }>('/api/v1/lights/:lightId', async (request, reply) => {
+    requireControllerAccess(request.headers.authorization, config);
+    const id = validateLightId(request.params.lightId);
+    const light = await store.remove(id);
+
+    if (!light) {
+      throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
+    }
+
+    return reply.status(204).send();
+  });
 
   app.get<{ Params: { lightId: string } }>('/display/:lightId', async (request, reply) => {
     validateLightId(request.params.lightId);
@@ -190,18 +208,33 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     socket.on('error', cleanup);
 
     void store
-      .ensure(lightId)
+      .get(lightId)
       .then((light) => {
         if (closed) {
           return;
         }
 
+        if (!light) {
+          socket.close(1008, 'The requested light does not exist.');
+          return;
+        }
+
         socket.send(websocketMessage('state.snapshot', light));
-        unsubscribe = store.onChange((changedLight) => {
+        const unsubscribeChanged = store.onChange((changedLight) => {
           if (!closed && changedLight.id === lightId && socket.readyState === 1) {
             socket.send(websocketMessage('state.changed', changedLight));
           }
         });
+        const unsubscribeDeleted = store.onDelete((deletedLight) => {
+          if (!closed && deletedLight.id === lightId && socket.readyState === 1) {
+            socket.send(deletedWebsocketMessage(lightId));
+            socket.close(1000, 'Light deleted.');
+          }
+        });
+        unsubscribe = () => {
+          unsubscribeChanged();
+          unsubscribeDeleted();
+        };
       })
       .catch((error: unknown) => {
         app.log.error(error, 'Unable to initialize display websocket.');

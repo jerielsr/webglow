@@ -1,6 +1,6 @@
 # WebGlow
 
-WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display. Open a unique display URL on the device, then use the REST API to set its on/off state, rendered brightness, colour, and pattern. Updates reach open displays live over WebSocket and survive container restarts.
+WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display. Its browser portal creates and manages displays, while the REST API can set their on/off state, rendered brightness, colour, and pattern. Updates reach open displays live over WebSocket and survive container restarts.
 
 This is the first service layer for a future Home Assistant integration/add-on, Bitfocus Companion module, and Art-Net adapter. Those integrations are not included yet.
 
@@ -26,7 +26,7 @@ Build and start the stack:
 docker compose --env-file .env up --build --detach
 ```
 
-The service is then available at `http://<server-ip>:3000`. Its saved lights live in the named Docker volume `webglow-data`.
+The WebGlow portal is then available at `http://<server-ip>:1828`. Its saved lights live in the named Docker volume `webglow-data`.
 
 Useful lifecycle commands:
 
@@ -45,7 +45,7 @@ docker compose --env-file .env up --build --detach
 docker compose --env-file .env down
 ```
 
-To use another host port, set `WEBGLOW_PORT` in `.env`; for example `WEBGLOW_PORT=8088` serves WebGlow on port `8088` while it continues to listen on port `3000` inside the container.
+To use another host port, set `WEBGLOW_PORT` in `.env`; for example `WEBGLOW_PORT=8088` serves WebGlow on port `8088` while it continues to listen on port `1828` inside the container.
 
 ### Deploy as a Portainer stack
 
@@ -79,7 +79,7 @@ These steps target a Docker Standalone endpoint. In a Swarm deployment, the name
    | Variable | Value |
    | --- | --- |
    | `WEBGLOW_API_TOKEN` | A long random secret, for example the output of `openssl rand -hex 32`. |
-   | `WEBGLOW_PORT` | `3000`, or the host port you want to expose. |
+   | `WEBGLOW_PORT` | `1828`, or the host port you want to expose. |
    | `WEBGLOW_CORS_ORIGIN` | Optional; keep `*` for the default or set your controller's exact origin. |
    | `WEBGLOW_IMAGE` | Optional; defaults to `ghcr.io/jerielsr/webglow`. Set this for a fork or another registry. |
    | `WEBGLOW_IMAGE_TAG` | Optional; defaults to `latest`. Pin a version tag for controlled upgrades. |
@@ -95,10 +95,10 @@ docker compose --env-file .env -f compose.portainer.yaml up --detach
 
 For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
 
-Create a light and open the returned `displayPath` on the phone or tablet you want to use:
+Open the portal at `http://<server-ip>:1828`, add your API token in **Controller access** when prompted, and create a light. It provides the display link to open on the phone or tablet. The same lifecycle is available through the API:
 
 ```sh
-curl --request POST http://localhost:3000/api/v1/lights \
+curl --request POST http://localhost:1828/api/v1/lights \
   --header 'Authorization: Bearer replace-with-a-long-random-token' \
   --header 'Content-Type: application/json' \
   --data '{"id":"kitchen-tablet","name":"Kitchen tablet"}'
@@ -126,14 +126,14 @@ Example response:
 }
 ```
 
-Open `http://<server-ip>:3000/display/kitchen-tablet` on the device. The light starts off deliberately, avoiding a surprise bright screen. Tap the small `i` button to enter fullscreen or request Wake Lock; both features require a user gesture and can vary by browser.
+Open `http://<server-ip>:1828/display/kitchen-tablet` on the device. The light starts off deliberately, avoiding a surprise bright screen. Tap the small `i` button to enter fullscreen or request Wake Lock; both features require a user gesture and can vary by browser.
 
 ## Control it
 
 Turn the display on with a solid cyan output:
 
 ```sh
-curl --request PATCH http://localhost:3000/api/v1/lights/kitchen-tablet \
+curl --request PATCH http://localhost:1828/api/v1/lights/kitchen-tablet \
   --header 'Authorization: Bearer replace-with-a-long-random-token' \
   --header 'Content-Type: application/json' \
   --data '{"on":true,"brightness":75,"color":"#00D9FF","pattern":"solid"}'
@@ -142,7 +142,7 @@ curl --request PATCH http://localhost:3000/api/v1/lights/kitchen-tablet \
 Try a pattern:
 
 ```sh
-curl --request PATCH http://localhost:3000/api/v1/lights/kitchen-tablet \
+curl --request PATCH http://localhost:1828/api/v1/lights/kitchen-tablet \
   --header 'Authorization: Bearer replace-with-a-long-random-token' \
   --header 'Content-Type: application/json' \
   --data '{"pattern":"rainbow","speed":35}'
@@ -151,7 +151,7 @@ curl --request PATCH http://localhost:3000/api/v1/lights/kitchen-tablet \
 Turn it off without losing its colour, brightness, or pattern settings:
 
 ```sh
-curl --request PATCH http://localhost:3000/api/v1/lights/kitchen-tablet \
+curl --request PATCH http://localhost:1828/api/v1/lights/kitchen-tablet \
   --header 'Authorization: Bearer replace-with-a-long-random-token' \
   --header 'Content-Type: application/json' \
   --data '{"on":false}'
@@ -181,11 +181,13 @@ All successful light resources have this shape:
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/healthz` | Container health check. |
+| `GET` | `/` | Browser portal to create, manage, and control lights. |
 | `GET` | `/api/v1/info` | API version and supported capabilities. |
 | `GET` | `/api/v1/lights` | List known logical lights. |
 | `POST` | `/api/v1/lights` | Create a light. Body accepts optional `id` and `name`. |
-| `GET` | `/api/v1/lights/:id` | Get a light. A first display fetch creates it with safe, off defaults. |
-| `PATCH` | `/api/v1/lights/:id` | Update its state. Requires an existing light. |
+| `GET` | `/api/v1/lights/:id` | Get an existing light. Returns `404` when it has not been created. |
+| `PATCH` | `/api/v1/lights/:id` | Update its name or state. Requires an existing light. |
+| `DELETE` | `/api/v1/lights/:id` | Remove a light and turn connected displays black. |
 | `GET` | `/display/:id` | Full-screen browser renderer for that light. |
 | `GET` | `/api/v1/ws?role=display&lightId=:id` | Display-only live state stream. |
 
@@ -195,6 +197,7 @@ When `WEBGLOW_API_TOKEN` is set, `POST` and `PATCH` require `Authorization: Bear
 
 | Field | Value |
 | --- | --- |
+| `name` | String containing 1–80 characters. |
 | `on` | Boolean. `false` renders black but retains settings. |
 | `brightness` | Number from `0` to `100`; rendered brightness, not physical device brightness. |
 | `color` | Three- or six-digit CSS hex colour, such as `#0AB` or `#00AABB`. |
@@ -230,7 +233,7 @@ For photosensitivity safety, WebGlow constrains the browser strobe renderer to r
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `PORT` | `3000` | HTTP port. |
+| `PORT` | `1828` | HTTP and portal port. |
 | `HOST` | `0.0.0.0` | Bind address. |
 | `DATA_DIR` | `./data` locally, `/data` in Docker | Directory containing `lights.json`. |
 | `WEBGLOW_API_TOKEN` | unset | Optional Bearer token that protects controller endpoints. Set this in real deployments. |

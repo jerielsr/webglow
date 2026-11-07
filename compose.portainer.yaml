@@ -4,7 +4,7 @@ services:
     # Override WEBGLOW_IMAGE when using your own registry or a fork.
     image: "${WEBGLOW_IMAGE:-ghcr.io/jerielsr/webglow}:${WEBGLOW_IMAGE_TAG:-latest}"
     ports:
-      - "${WEBGLOW_PORT:-3000}:3000"
+      - "${WEBGLOW_PORT:-1828}:1828"
     environment:
       WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"
       WEBGLOW_CORS_ORIGIN: "${WEBGLOW_CORS_ORIGIN:-*}"
