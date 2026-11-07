@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101a23" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>WebGlow Console</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/app-icon.svg" />
+    <link rel="stylesheet" href="/portal.css" />
+  </head>
+  <body class="console-body">
+    <header class="console-header">
+      <a class="console-brand" href="/" data-route aria-label="WebGlow Console home"><span class="console-mark">W</span><span>WebGlow <b>Console</b></span></a>
+      <nav class="console-nav" aria-label="Portal navigation">
+        <a href="/" data-route data-view-link="console">Control</a>
+        <a href="/setup" data-route data-view-link="setup">Setup</a>
+        <a href="/settings" data-route data-view-link="settings">Settings</a>
+      </nav>
+      <div class="console-header-right">
+        <span id="portal-status" class="console-status" role="status">Connecting…</span>
+        <button id="blackout" class="blackout-button" type="button">Blackout</button>
+      </div>
+    </header>
+
+    <main class="console-shell">
+      <section id="view-console" class="app-view">
+        <div class="console-commandbar">
+          <span class="command-label">Command line</span>
+          <output id="command-line">Select fixtures to begin</output>
+          <div class="command-actions">
+            <button id="clear-programmer" class="console-button subtle-button" type="button">Clear</button>
+            <button id="all-fixtures" class="console-button subtle-button" type="button">All fixtures</button>
+          </div>
+        </div>
+
+        <div class="console-grid">
+          <section class="console-panel fixture-sheet" aria-labelledby="fixture-sheet-title">
+            <div class="console-panel-heading">
+              <div><p>Fixture sheet</p><h1 id="fixture-sheet-title">Web displays</h1></div>
+              <span id="fixture-count" class="console-count">0 fixtures</span>
+            </div>
+            <div id="fixture-grid" class="fixture-grid" aria-live="polite"></div>
+            <p id="fixture-empty" class="console-empty" hidden>Create displays in Setup, then select them here.</p>
+          </section>
+
+          <section class="console-panel programmer-panel" aria-labelledby="programmer-title">
+            <div class="console-panel-heading">
+              <div><p>Programmer</p><h1 id="programmer-title">Live output</h1></div>
+              <span id="programmer-target" class="console-count">All fixtures</span>
+            </div>
+            <div class="attribute-tabs" aria-label="Programmer attributes">
+              <button class="attribute-tab active" type="button" data-attribute="intensity">Dimmer</button>
+              <button class="attribute-tab" type="button" data-attribute="colour">Colour</button>
+              <button class="attribute-tab" type="button" data-attribute="effect">Effects</button>
+            </div>
+            <div class="programmer-attributes">
+              <label class="console-fader">
+                <span>Dimmer</span>
+                <input id="program-brightness" type="range" min="0" max="100" value="80" />
+                <output id="program-brightness-output">80%</output>
+              </label>
+              <label class="console-fader">
+                <span>Speed</span>
+                <input id="program-speed" type="range" min="0" max="100" value="50" />
+                <output id="program-speed-output">50%</output>
+              </label>
+              <label class="console-field colour-field"><span>Colour</span><input id="program-colour" type="color" value="#2EA8FF" /></label>
+              <label class="console-field"><span>Effect</span>
+                <select id="program-pattern">
+                  <option value="solid">Solid</option><option value="breathe">Breathe</option><option value="pulse">Pulse</option><option value="strobe">Strobe</option><option value="rainbow">Rainbow</option><option value="twinkle">Twinkle</option><option value="chase">Chase</option>
+                </select>
+              </label>
+              <label class="console-field"><span>Fade</span>
+                <select id="program-fade"><option value="0">0 s</option><option value="250">0.25 s</option><option value="500">0.5 s</option><option value="1000" selected>1 s</option><option value="2000">2 s</option><option value="5000">5 s</option><option value="10000">10 s</option></select>
+              </label>
+            </div>
+            <div class="programmer-actions">
+              <button id="apply-live" class="console-button go-button" type="button">Apply live</button>
+              <button id="flash-fixtures" class="console-button flash-button" type="button">Flash</button>
+              <button id="make-chase" class="console-button subtle-button" type="button">Make chase</button>
+            </div>
+          </section>
+
+          <aside class="console-panel masters-panel" aria-labelledby="masters-title">
+            <div class="console-panel-heading"><div><p>Masters</p><h1 id="masters-title">Playback</h1></div><button id="reset-masters" class="console-button subtle-button" type="button">Reset</button></div>
+            <div class="master-toolbar">
+              <label>Deck size <select id="master-layout" aria-label="Master fader deck size"><option value="compact">Compact</option><option value="standard" selected>Standard</option><option value="large">Large touch</option></select></label>
+              <div class="master-presets" aria-label="Master presets">
+                <button class="master-preset" type="button" data-master-preset="full">Full</button>
+                <button class="master-preset" type="button" data-master-preset="half">Half</button>
+                <button class="master-preset" type="button" data-master-preset="snap">Snap</button>
+              </div>
+            </div>
+            <div id="master-deck" class="master-deck" data-layout="standard">
+              <label class="touch-fader grand-master-fader"><span>Grand</span><output id="grand-master-output">100%</output><input id="grand-master" type="range" min="0" max="100" value="100" aria-label="Grand master" /><small>Output</small></label>
+              <label class="touch-fader"><span>Rate</span><output id="rate-master-output">100%</output><input id="rate-master" type="range" min="10" max="200" value="100" aria-label="Rate master" /><small>Speed</small></label>
+              <label class="touch-fader"><span>Fade</span><output id="fade-master-output">100%</output><input id="fade-master" type="range" min="0" max="200" value="100" aria-label="Fade master" /><small>Time</small></label>
+            </div>
+            <div class="master-actions"><button id="restore-output" class="console-button subtle-button" type="button">Restore output</button><button id="master-blackout" class="console-button danger-button" type="button">Blackout</button></div>
+            <div id="metrics-list" class="console-metrics" aria-live="polite"></div>
+          </aside>
+        </div>
+
+        <section class="console-panel cue-stack" aria-labelledby="cue-stack-title">
+          <div class="console-panel-heading">
+            <div><p>Cue stack</p><h1 id="cue-stack-title">Main playback</h1></div>
+            <div class="cue-record">
+              <label>Cue <input id="cue-number" inputmode="decimal" value="1" aria-label="Cue number" /></label>
+              <label>Name <input id="cue-name" placeholder="Warm welcome" aria-label="Cue name" /></label>
+              <button id="record-cue" class="console-button record-button" type="button">Record</button>
+            </div>
+          </div>
+          <div class="cue-table-head" aria-hidden="true"><span>Cue</span><span>Name</span><span>Fixtures</span><span>Fade</span><span>Playback</span></div>
+          <div id="cue-list" class="cue-list"></div>
+          <p id="cue-empty" class="console-empty">Record the current programmer values as Cue 1.</p>
+        </section>
+      </section>
+
+      <section id="view-setup" class="app-view" hidden>
+        <div class="view-heading"><div><p>Fixture setup</p><h1>Create and manage fixtures</h1><span>Display links, WLED connections, and fixture records live here; server configuration is in Settings.</span></div></div>
+        <div class="setup-console-grid">
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>New fixture</p><h1>Create display</h1></div></div>
+            <form id="create-light-form" class="console-form">
+              <label>Fixture type <select id="new-light-kind"><option value="display">Web display</option><option value="wled">WLED device</option></select><small>Web displays open a full-screen URL. WLED devices are controlled directly over your local network.</small></label>
+              <label>Fixture ID <input id="new-light-id" maxlength="64" placeholder="kitchen-tablet" autocomplete="off" /><small>Optional. Letters, numbers, hyphens, and underscores only.</small></label>
+              <label>Fixture name <input id="new-light-name" maxlength="80" placeholder="Kitchen tablet" autocomplete="off" /></label>
+              <label id="new-wled-url-field" hidden>WLED URL <input id="new-wled-url" type="url" placeholder="http://wled.local" inputmode="url" autocomplete="url" /><small>WebGlow checks this address before adding the fixture. The container must be able to reach it.</small></label>
+              <label id="new-wled-segment-field" hidden>WLED segment <input id="new-wled-segment" type="number" min="0" max="255" value="0" inputmode="numeric" /><small>Use 0 for the primary segment.</small></label>
+              <button id="create-fixture-button" class="console-button go-button" type="submit">Create web display</button>
+            </form>
+          </section>
+          <section class="console-panel setup-note">
+            <p>Display workflow</p><h1>1. Create<br />2. Copy URL<br />3. Open it fullscreen</h1>
+            <span>Each phone, tablet, or WLED device becomes one individually addressable fixture.</span>
+          </section>
+        </div>
+        <section class="console-panel fixture-manager">
+          <div class="console-panel-heading"><div><p>Fixture manager</p><h1>Displays</h1></div><button id="refresh-lights" class="console-button subtle-button" type="button">Refresh</button></div>
+          <div id="setup-lights" class="setup-lights"></div>
+          <p id="setup-empty" class="console-empty">No displays yet.</p>
+        </section>
+      </section>
+
+      <section id="view-settings" class="app-view" hidden>
+        <div class="view-heading"><div><p>System settings</p><h1>Server, container, and portal access</h1><span>These details are kept away from the operator console.</span></div><button id="logout" class="console-button subtle-button" type="button">Sign out</button></div>
+        <div class="settings-grid">
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Display address</p><h1>Public application URL</h1></div></div>
+            <p class="console-copy">Use the address phones and tablets can reach. Display links use it instead of the local IP address and port.</p>
+            <form id="public-url-form" class="console-form">
+              <label>Public base URL <input id="public-base-url" type="url" placeholder="https://lights.example.com" inputmode="url" /></label>
+              <div><button class="console-button go-button" type="submit">Save address</button><button id="use-current-url" class="console-button subtle-button" type="button">Use current</button></div>
+            </form>
+          </section>
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Server &amp; container</p><h1>Runtime</h1></div><button id="refresh-metrics" class="console-button subtle-button" type="button">Refresh</button></div>
+            <dl id="server-details" class="console-details"></dl>
+          </section>
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Portal access</p><h1>Change password</h1></div></div>
+            <form id="password-form" class="console-form">
+              <label>Current password <input id="current-password" type="password" autocomplete="current-password" minlength="12" required /></label>
+              <label>New password <input id="new-password" type="password" autocomplete="new-password" minlength="12" required /></label>
+              <button class="console-button subtle-button" type="submit">Change password</button>
+            </form>
+          </section>
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Automation</p><h1>API &amp; PWA</h1></div></div>
+            <p class="console-copy">Portal access uses a secure session. External controllers use the optional Bearer token configured in Docker.</p>
+            <ul class="console-list"><li>GET /api/v1/lights</li><li>POST /api/v1/lights/batch</li><li>POST /api/v1/scenes/:cue/go</li></ul>
+            <button id="install-app" class="console-button subtle-button" type="button" hidden>Install WebGlow</button>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="auth-dialog" class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title" hidden>
+      <form id="auth-form" class="auth-card">
+        <p class="eyebrow">Secure portal</p><h1 id="auth-title">Sign in to WebGlow</h1><p id="auth-copy" class="subtle"></p>
+        <label>Username <input id="auth-username" autocomplete="username" required /></label>
+        <label>Password <input id="auth-password" type="password" minlength="12" autocomplete="current-password" required /></label>
+        <button id="auth-submit" class="console-button go-button" type="submit">Sign in</button>
+        <button id="show-reset" class="text-button" type="button" hidden>Reset password</button>
+        <p id="auth-error" class="form-message" role="alert"></p>
+      </form>
+    </div>
+    <div id="reset-dialog" class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title" hidden>
+      <form id="reset-form" class="auth-card">
+        <p class="eyebrow">Recovery</p><h1 id="reset-title">Reset portal password</h1><p class="subtle">Use the recovery token set as WEBGLOW_PASSWORD_RESET_TOKEN in your Docker stack.</p>
+        <label>Username <input id="reset-username" autocomplete="username" required /></label>
+        <label>Recovery token <input id="reset-token" type="password" required /></label>
+        <label>New password <input id="reset-password" type="password" minlength="12" autocomplete="new-password" required /></label>
+        <button class="console-button go-button" type="submit">Reset password</button><button id="cancel-reset" class="text-button" type="button">Back to sign in</button><p id="reset-error" class="form-message" role="alert"></p>
+      </form>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

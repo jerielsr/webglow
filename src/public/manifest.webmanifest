@@ -1,0 +1,17 @@
+{
+  "name": "WebGlow Console",
+  "short_name": "WebGlow",
+  "description": "A browser light console for WebGlow fixtures.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#091016",
+  "theme_color": "#101a23",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

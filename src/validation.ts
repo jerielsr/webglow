@@ -1,5 +1,5 @@
 import { ApiError } from './errors.js';
-import { isPattern, type CreateLightInput, type LightPatch } from './types.js';
+import { isPattern, type CreateLightInput, type CreateSceneInput, type LightPatch, type WledFixtureConfig } from './types.js';
 
 export interface BatchLightPatchInput {
   ids: 'all' | string[];
@@ -15,6 +15,7 @@ export interface ChaseInput {
 }
 
 const LIGHT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+const SCENE_ID_PATTERN = /^\d{1,3}(?:\.\d{1,3})?$/;
 
 function asRecord(value: unknown, subject: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -86,6 +87,18 @@ export function validateLightId(value: string): string {
   return value;
 }
 
+export function validateSceneId(value: unknown): string {
+  if (typeof value !== 'string' || !SCENE_ID_PATTERN.test(value.trim())) {
+    throw new ApiError(
+      400,
+      'invalid_scene_id',
+      'Cue numbers must use up to three digits, with an optional decimal part such as 1 or 12.5.',
+      { field: 'id' },
+    );
+  }
+  return value.trim();
+}
+
 export function validateName(value: unknown): string {
   if (typeof value !== 'string') {
     throw new ApiError(400, 'invalid_request', 'name must be a string.', { field: 'name' });
@@ -118,13 +131,52 @@ export function normalizeColor(value: unknown): string {
   return `#${expanded}`;
 }
 
+function validateWledConfig(value: unknown): WledFixtureConfig {
+  const record = asRecord(value, 'wled');
+  rejectUnknownKeys(record, ['url', 'segment']);
+  if (typeof record.url !== 'string') {
+    throw new ApiError(400, 'invalid_request', 'wled.url must be an HTTP or HTTPS URL.', { field: 'wled.url' });
+  }
+
+  let url: URL;
+  try {
+    url = new URL(record.url.trim());
+  } catch {
+    throw new ApiError(400, 'invalid_request', 'wled.url must be an HTTP or HTTPS URL.', { field: 'wled.url' });
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol) ||
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new ApiError(
+      400,
+      'invalid_request',
+      'wled.url must be a plain HTTP or HTTPS address without credentials, query text, or a fragment.',
+      { field: 'wled.url' },
+    );
+  }
+
+  const segment = record.segment === undefined ? 0 : record.segment;
+  if (!Number.isInteger(segment) || (segment as number) < 0 || (segment as number) > 255) {
+    throw new ApiError(400, 'invalid_request', 'wled.segment must be an integer from 0 to 255.', {
+      field: 'wled.segment',
+    });
+  }
+
+  return { url: url.toString().replace(/\/$/, ''), segment: segment as number };
+}
+
 export function validateCreateLight(value: unknown): CreateLightInput {
   if (value === undefined || value === null) {
     return {};
   }
 
   const record = asRecord(value, 'The request body');
-  rejectUnknownKeys(record, ['id', 'name']);
+  rejectUnknownKeys(record, ['id', 'name', 'kind', 'wled']);
 
   const input: CreateLightInput = {};
   if (record.id !== undefined) {
@@ -135,6 +187,19 @@ export function validateCreateLight(value: unknown): CreateLightInput {
   }
   if (record.name !== undefined) {
     input.name = validateName(record.name);
+  }
+  if (record.kind !== undefined && record.kind !== 'display' && record.kind !== 'wled') {
+    throw new ApiError(400, 'invalid_request', 'kind must be "display" or "wled".', { field: 'kind' });
+  }
+  const kind = record.kind ?? 'display';
+  if (kind === 'wled') {
+    if (record.wled === undefined) {
+      throw new ApiError(400, 'invalid_request', 'wled is required when kind is "wled".', { field: 'wled' });
+    }
+    input.kind = 'wled';
+    input.wled = validateWledConfig(record.wled);
+  } else if (record.wled !== undefined) {
+    throw new ApiError(400, 'invalid_request', 'wled can only be provided when kind is "wled".', { field: 'wled' });
   }
 
   return input;
@@ -235,6 +300,22 @@ export function validateChase(value: unknown): ChaseInput {
       throw new ApiError(400, 'invalid_request', 'on must be a boolean.', { field: 'on' });
     }
     input.on = record.on;
+  }
+  return input;
+}
+
+export function validateCreateScene(value: unknown): CreateSceneInput {
+  const record = asRecord(value, 'The request body');
+  rejectUnknownKeys(record, ['id', 'name', 'ids', 'state']);
+  const id = validateSceneId(record.id);
+  const ids = validateTargetIds(record.ids);
+  const state = validateLightPatch(record.state);
+  if (state.name !== undefined || state.expectedRevision !== undefined || state.phaseOffset !== undefined) {
+    throw new ApiError(400, 'invalid_request', 'Cue state can only include output fields.', { field: 'state' });
+  }
+  const input: CreateSceneInput = { id, ids, state };
+  if (record.name !== undefined) {
+    input.name = validateName(record.name);
   }
   return input;
 }

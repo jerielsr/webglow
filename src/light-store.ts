@@ -8,9 +8,11 @@ import {
   DEFAULT_LIGHT_STATE,
   isPattern,
   type CreateLightInput,
+  type FixtureKind,
   type LightPatch,
   type LightResource,
   type LightState,
+  type WledFixtureConfig,
 } from './types.js';
 
 interface PersistedLights {
@@ -21,11 +23,26 @@ interface PersistedLights {
 function cloneLight(light: LightResource): LightResource {
   return {
     ...light,
+    kind: light.kind ?? 'display',
     state: {
       ...DEFAULT_LIGHT_STATE,
       ...light.state,
     },
   };
+}
+
+function hasWledShape(value: unknown): value is WledFixtureConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const wled = value as Partial<WledFixtureConfig>;
+  const map = wled.effectMap;
+  return (
+    typeof wled.url === 'string' &&
+    Number.isInteger(wled.segment) &&
+    (map === undefined ||
+      (typeof map === 'object' &&
+        map !== null &&
+        Object.values(map).every((effect) => Number.isInteger(effect) && (effect as number) >= 0)))
+  );
 }
 
 function hasPersistedLightShape(value: unknown): value is LightResource {
@@ -38,6 +55,7 @@ function hasPersistedLightShape(value: unknown): value is LightResource {
   return (
     typeof light.id === 'string' &&
     typeof light.name === 'string' &&
+    (light.kind === undefined || light.kind === 'display' || (light.kind === 'wled' && hasWledShape(light.wled))) &&
     typeof light.revision === 'number' &&
     typeof light.updatedAt === 'string' &&
     typeof state?.on === 'boolean' &&
@@ -112,9 +130,12 @@ export class LightStore {
     }
 
     const now = new Date();
+    const kind: FixtureKind = input.kind ?? 'display';
     const light: LightResource = {
       id,
       name: input.name ?? id,
+      kind,
+      ...(kind === 'wled' && input.wled ? { wled: input.wled } : {}),
       state: {
         ...DEFAULT_LIGHT_STATE,
         patternStartedAt: now.getTime(),

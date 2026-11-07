@@ -5,8 +5,9 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import { buildApp } from '../dist/app.js';
+import { WledClient } from '../dist/wled-client.js';
 
-async function withApp(callback, configuration = {}) {
+async function withApp(callback, configuration = {}, services = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'webglow-test-'));
   const app = await buildApp({
     logger: false,
@@ -15,6 +16,7 @@ async function withApp(callback, configuration = {}) {
       staticRoot: resolve('dist/public'),
       ...configuration,
     },
+    ...services,
   });
   await app.ready();
 
@@ -133,11 +135,15 @@ test('serves the portal and requires lights to be created before they can be fet
     const portal = await app.inject({ method: 'GET', url: '/' });
     assert.equal(portal.statusCode, 200);
     assert.match(portal.headers['content-type'], /^text\/html/);
-    assert.match(portal.body, /WebGlow Control/);
+    assert.match(portal.body, /WebGlow Console/);
 
     const setup = await app.inject({ method: 'GET', url: '/setup' });
     assert.equal(setup.statusCode, 200);
-    assert.match(setup.body, /WebGlow Setup/);
+    assert.match(setup.body, /WebGlow Console/);
+
+    const settings = await app.inject({ method: 'GET', url: '/settings' });
+    assert.equal(settings.statusCode, 200);
+    assert.match(settings.body, /System settings/);
 
     const missing = await app.inject({ method: 'GET', url: '/api/v1/lights/tablet' });
     assert.equal(missing.statusCode, 404);
@@ -250,6 +256,14 @@ test('uses a portal session for protected management and persists display settin
       assert.equal(settings.statusCode, 200);
       assert.equal(settings.json().publicBaseUrl, 'https://lights.example.test/webglow');
 
+      const serverSettings = await app.inject({
+        method: 'GET',
+        url: '/api/v1/settings',
+        headers: { cookie: sessionCookie },
+      });
+      assert.equal(serverSettings.statusCode, 200);
+      assert.equal(serverSettings.json().server.port, 1828);
+
       const metrics = await app.inject({
         method: 'GET',
         url: '/api/v1/metrics',
@@ -292,6 +306,100 @@ test('updates groups and creates phased chases', async () => {
       [0, 0.5],
     );
     assert.ok(chase.json().lights.every((light) => light.state.pattern === 'chase' && light.state.on));
+  });
+});
+
+test('adds and drives a WLED fixture through its JSON API', async () => {
+  const calls = [];
+  const wledClient = new WledClient(async (url, init) => {
+    calls.push({ url, init });
+    const body = init?.method === 'POST'
+      ? { state: { on: true } }
+      : {
+          info: { name: 'Garden pixels' },
+          effects: ['Solid', 'Breathe', 'Strobe', 'Rainbow', 'Chase', 'Twinkle'],
+          state: {
+            on: true,
+            bri: 128,
+            transition: 5,
+            seg: [{ id: 0, bri: 128, col: [[12, 34, 56]], fx: 0, sx: 64 }],
+          },
+        };
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+
+  await withApp(async (app) => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights',
+      payload: { id: 'garden-wled', kind: 'wled', wled: { url: 'http://wled.test', segment: 0 } },
+    });
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().light.kind, 'wled');
+    assert.equal(created.json().light.name, 'Garden pixels');
+    assert.equal(created.json().light.state.color, '#0C2238');
+    assert.equal(created.json().displayPath, undefined);
+
+    const display = await app.inject({ method: 'GET', url: '/display/garden-wled' });
+    assert.equal(display.statusCode, 409);
+
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/lights/garden-wled',
+      payload: { on: true, brightness: 75, color: '#f0a', pattern: 'breathe', speed: 40, fadeMs: 1000 },
+    });
+    assert.equal(updated.statusCode, 200);
+    const command = JSON.parse(calls.at(-1).init.body);
+    assert.equal(command.on, true);
+    assert.equal(command.tt, 10);
+    assert.deepEqual(command.seg[0].col, [[255, 0, 170]]);
+    assert.equal(command.seg[0].fx, 1);
+    assert.equal(command.seg[0].sx, 102);
+
+    const refreshed = await app.inject({ method: 'POST', url: '/api/v1/lights/garden-wled/wled/refresh' });
+    assert.equal(refreshed.statusCode, 200);
+    assert.equal(refreshed.json().light.kind, 'wled');
+  }, {}, { wledClient });
+});
+
+test('records, plays, and deletes persistent console cues', async () => {
+  await withApp(async (app) => {
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'cue-left' } });
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'cue-right' } });
+
+    const record = await app.inject({
+      method: 'POST',
+      url: '/api/v1/scenes',
+      payload: {
+        id: '1.5',
+        name: 'Ocean look',
+        ids: ['cue-left', 'cue-right'],
+        state: { on: true, brightness: 71, color: '#07c', pattern: 'breathe', speed: 34, fadeMs: 2000 },
+      },
+    });
+    assert.equal(record.statusCode, 201);
+    assert.equal(record.json().scene.name, 'Ocean look');
+
+    const listed = await app.inject({ method: 'GET', url: '/api/v1/scenes' });
+    assert.equal(listed.statusCode, 200);
+    assert.equal(listed.json().scenes.length, 1);
+
+    const go = await app.inject({ method: 'POST', url: '/api/v1/scenes/1.5/go' });
+    assert.equal(go.statusCode, 200);
+    assert.equal(go.json().count, 2);
+    assert.ok(go.json().lights.every((light) => light.state.color === '#0077CC' && light.state.pattern === 'breathe'));
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/scenes',
+      payload: { id: '1.5', ids: 'all', state: { on: false } },
+    });
+    assert.equal(duplicate.statusCode, 409);
+
+    const deleted = await app.inject({ method: 'DELETE', url: '/api/v1/scenes/1.5' });
+    assert.equal(deleted.statusCode, 204);
+    const gone = await app.inject({ method: 'POST', url: '/api/v1/scenes/1.5/go' });
+    assert.equal(gone.statusCode, 404);
   });
 });
 

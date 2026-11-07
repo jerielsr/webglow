@@ -12,14 +12,18 @@ import { ApiError } from './errors.js';
 import { LightStore } from './light-store.js';
 import { Metrics } from './metrics.js';
 import { PortalAuth } from './portal-auth.js';
+import { SceneStore } from './scene-store.js';
 import { SettingsStore } from './settings-store.js';
 import { PATTERNS, type LightPatch, type LightResource } from './types.js';
+import { WledClient } from './wled-client.js';
 import {
   validateBatchLightPatch,
   validateChase,
+  validateCreateScene,
   validateCreateLight,
   validateLightId,
   validateLightPatch,
+  validateSceneId,
 } from './validation.js';
 
 const SESSION_COOKIE = 'webglow_portal_session';
@@ -29,12 +33,17 @@ export interface BuildAppOptions {
   logger?: boolean | FastifyBaseLogger;
   store?: LightStore;
   settingsStore?: SettingsStore;
+  sceneStore?: SceneStore;
+  wledClient?: WledClient;
 }
 
 function mergeConfig(overrides: Partial<WebglowConfig> = {}): WebglowConfig {
   const config = { ...getConfig(), ...overrides };
   if (overrides.dataFile && !overrides.settingsFile) {
     config.settingsFile = join(dirname(overrides.dataFile), 'settings.json');
+  }
+  if (overrides.dataFile && !overrides.scenesFile) {
+    config.scenesFile = join(dirname(overrides.dataFile), 'scenes.json');
   }
   return config;
 }
@@ -137,7 +146,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const config = mergeConfig(options.config);
   const store = options.store ?? new LightStore(config.dataFile);
   const settings = options.settingsStore ?? new SettingsStore(config.settingsFile);
-  await Promise.all([store.initialize(), settings.initialize()]);
+  const scenes = options.sceneStore ?? new SceneStore(config.scenesFile);
+  const wled = options.wledClient ?? new WledClient();
+  await Promise.all([store.initialize(), settings.initialize(), scenes.initialize()]);
   const portalAuth = new PortalAuth(settings, config.passwordResetToken);
   const metrics = new Metrics();
 
@@ -170,6 +181,74 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
   }
 
+  function hasOutputPatch(patch: LightPatch): boolean {
+    return (
+      patch.on !== undefined ||
+      patch.brightness !== undefined ||
+      patch.color !== undefined ||
+      patch.pattern !== undefined ||
+      patch.speed !== undefined ||
+      patch.fadeMs !== undefined ||
+      patch.phaseOffset !== undefined
+    );
+  }
+
+  function previewLight(light: LightResource, patch: LightPatch): LightResource {
+    return {
+      ...light,
+      ...(patch.name === undefined ? {} : { name: patch.name }),
+      state: {
+        ...light.state,
+        ...(patch.on === undefined ? {} : { on: patch.on }),
+        ...(patch.brightness === undefined ? {} : { brightness: patch.brightness }),
+        ...(patch.color === undefined ? {} : { color: patch.color }),
+        ...(patch.pattern === undefined ? {} : { pattern: patch.pattern }),
+        ...(patch.speed === undefined ? {} : { speed: patch.speed }),
+        ...(patch.fadeMs === undefined ? {} : { fadeMs: patch.fadeMs }),
+        ...(patch.phaseOffset === undefined ? {} : { phaseOffset: patch.phaseOffset }),
+      },
+    };
+  }
+
+  /**
+   * Physical WLED fixtures are driven before their persisted state changes.
+   * This prevents the console from reporting a successful live cue when a
+   * reachable device has rejected or missed the command.
+   */
+  async function updateLights(updates: Array<{ id: string; patch: LightPatch }>): Promise<LightResource[]> {
+    const current = await Promise.all(updates.map((update) => store.get(update.id)));
+    if (current.some((light) => !light)) return [];
+
+    const existing = current as LightResource[];
+    for (let index = 0; index < updates.length; index += 1) {
+      const expected = updates[index].patch.expectedRevision;
+      if (expected !== undefined && expected !== existing[index].revision) {
+        throw new ApiError(409, 'revision_conflict', 'The light changed since the revision supplied with this request.', {
+          expectedRevision: expected,
+          currentRevision: existing[index].revision,
+        });
+      }
+    }
+
+    await Promise.all(
+      updates.map(async (update, index) => {
+        const light = existing[index];
+        if (light.kind === 'wled' && hasOutputPatch(update.patch)) {
+          await wled.apply(previewLight(light, update.patch));
+        }
+      }),
+    );
+
+    return store.updateMany(
+      updates.map((update, index) => ({
+        id: update.id,
+        patch: update.patch.expectedRevision === undefined
+          ? { ...update.patch, expectedRevision: existing[index].revision }
+          : update.patch,
+      })),
+    );
+  }
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       if (error.statusCode === 401) reply.header('WWW-Authenticate', 'Bearer');
@@ -196,7 +275,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return payload;
   });
   app.addHook('onClose', async () => {
-    await Promise.all([store.close(), settings.close()]);
+    await Promise.all([store.close(), settings.close(), scenes.close()]);
   });
 
   await app.register(cookie);
@@ -208,8 +287,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(websocket);
   await app.register(fastifyStatic, { root: config.staticRoot, prefix: '/', index: false });
 
-  app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('control.html'));
-  app.get('/setup', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('setup.html'));
+  app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
+  app.get('/setup', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
+  app.get('/settings', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   app.get('/api/v1/info', async () => ({
@@ -221,6 +301,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     controllerBearerTokenConfigured: Boolean(config.apiToken),
     capabilities: {
       patterns: [...PATTERNS],
+      fixtureKinds: ['display', 'wled'],
       brightness: { minimum: 0, maximum: 100, unit: 'rendered-percent' },
       fadeMs: { minimum: 0, maximum: 60_000 },
       realtime: 'websocket',
@@ -299,6 +380,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       ...settings.getPublicSettings(),
       controllerBearerTokenConfigured: Boolean(config.apiToken),
       passwordResetConfigured: portalAuth.passwordResetConfigured(),
+      server: {
+        port: config.port,
+        corsOrigin: config.corsOrigin,
+        persistence: 'DATA_DIR',
+      },
     };
   });
 
@@ -325,6 +411,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.post<{ Body: unknown }>('/api/v1/lights', async (request, reply) => {
     requireControllerAccess(request);
     const input = validateCreateLight(request.body);
+    if (input.kind === 'wled' && input.wled) {
+      const inspected = await wled.inspect(input.wled);
+      const created = await store.create({
+        ...input,
+        ...(input.name === undefined && inspected.name ? { name: inspected.name } : {}),
+        wled: { ...input.wled, effectMap: inspected.effectMap },
+      });
+      const light = (await store.update(created.id, {
+        on: inspected.state.on,
+        brightness: inspected.state.brightness,
+        color: inspected.state.color,
+        pattern: inspected.state.pattern,
+        speed: inspected.state.speed,
+        fadeMs: inspected.state.fadeMs,
+        phaseOffset: inspected.state.phaseOffset,
+      })) as LightResource;
+      return reply.status(201).send({ light });
+    }
     const light = await store.create(input);
     return reply.status(201).send({ light, displayPath: displayPath(light.id) });
   });
@@ -333,15 +437,37 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const id = validateLightId(request.params.lightId);
     const light = await store.get(id);
     if (!light) throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
+    if (light.kind === 'wled') requireControllerAccess(request);
     return light;
   });
 
   app.patch<{ Params: { lightId: string }; Body: unknown }>('/api/v1/lights/:lightId', async (request) => {
     requireControllerAccess(request);
     const id = validateLightId(request.params.lightId);
-    const light = await store.update(id, validateLightPatch(request.body));
+    const light = (await updateLights([{ id, patch: validateLightPatch(request.body) }]))[0];
     if (!light) throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
     return light;
+  });
+
+  app.post<{ Params: { lightId: string } }>('/api/v1/lights/:lightId/wled/refresh', async (request) => {
+    requireControllerAccess(request);
+    const id = validateLightId(request.params.lightId);
+    const light = await store.get(id);
+    if (!light) throw new ApiError(404, 'light_not_found', 'No light exists with ID "' + id + '".');
+    if (light.kind !== 'wled' || !light.wled) {
+      throw new ApiError(409, 'not_a_wled_fixture', 'This fixture is not connected to WLED.');
+    }
+    const inspected = await wled.inspect(light.wled);
+    const refreshed = await store.update(id, {
+      on: inspected.state.on,
+      brightness: inspected.state.brightness,
+      color: inspected.state.color,
+      pattern: inspected.state.pattern,
+      speed: inspected.state.speed,
+      fadeMs: inspected.state.fadeMs,
+      phaseOffset: inspected.state.phaseOffset,
+    });
+    return { light: refreshed };
   });
 
   app.post<{ Body: unknown }>('/api/v1/lights/batch', async (request) => {
@@ -353,7 +479,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (missing.length > 0) {
       throw new ApiError(404, 'light_not_found', 'One or more selected lights do not exist.', { ids: missing });
     }
-    const lights = await store.updateMany(targetIds.map((id) => ({ id, patch: input.state })));
+    const lights = await updateLights(targetIds.map((id) => ({ id, patch: input.state })));
     return { lights, count: lights.length };
   });
 
@@ -367,7 +493,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       throw new ApiError(404, 'light_not_found', 'One or more selected lights do not exist.', { ids: missing });
     }
     const denominator = Math.max(1, targetIds.length);
-    const lights = await store.updateMany(
+    const lights = await updateLights(
       targetIds.map((id, index) => ({
         id,
         patch: {
@@ -383,6 +509,44 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return { lights, count: lights.length };
   });
 
+  app.get('/api/v1/scenes', async (request) => {
+    requireControllerAccess(request);
+    return { scenes: await scenes.list() };
+  });
+
+  app.post<{ Body: unknown }>('/api/v1/scenes', async (request, reply) => {
+    requireControllerAccess(request);
+    const scene = await scenes.create(validateCreateScene(request.body));
+    return reply.status(201).send({ scene });
+  });
+
+  app.post<{ Params: { sceneId: string } }>('/api/v1/scenes/:sceneId/go', async (request) => {
+    requireControllerAccess(request);
+    const id = validateSceneId(request.params.sceneId);
+    const scene = await scenes.get(id);
+    if (!scene) {
+      throw new ApiError(404, 'cue_not_found', 'No cue exists with number "' + id + '".');
+    }
+    const targetIds = scene.ids === 'all' ? (await store.list()).map((light) => light.id) : scene.ids;
+    const existing = await Promise.all(targetIds.map((lightId) => store.get(lightId)));
+    const missing = targetIds.filter((_, index) => !existing[index]);
+    if (missing.length > 0) {
+      throw new ApiError(409, 'cue_targets_missing', 'This cue includes lights that no longer exist.', { ids: missing });
+    }
+    const lights = await updateLights(targetIds.map((lightId) => ({ id: lightId, patch: scene.state })));
+    return { scene, lights, count: lights.length };
+  });
+
+  app.delete<{ Params: { sceneId: string } }>('/api/v1/scenes/:sceneId', async (request, reply) => {
+    requireControllerAccess(request);
+    const id = validateSceneId(request.params.sceneId);
+    const scene = await scenes.remove(id);
+    if (!scene) {
+      throw new ApiError(404, 'cue_not_found', 'No cue exists with number "' + id + '".');
+    }
+    return reply.status(204).send();
+  });
+
   app.delete<{ Params: { lightId: string } }>('/api/v1/lights/:lightId', async (request, reply) => {
     requireControllerAccess(request);
     const id = validateLightId(request.params.lightId);
@@ -392,7 +556,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
 
   app.get<{ Params: { lightId: string } }>('/display/:lightId', async (request, reply) => {
-    validateLightId(request.params.lightId);
+    const id = validateLightId(request.params.lightId);
+    const light = await store.get(id);
+    if (!light) throw new ApiError(404, 'light_not_found', 'No light exists with ID "' + id + '".');
+    if (light.kind !== 'display') {
+      throw new ApiError(409, 'not_a_web_display', 'This fixture is a physical WLED device, not a web display.');
+    }
     return reply.type('text/html; charset=utf-8').sendFile('display.html');
   });
 
@@ -436,6 +605,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         if (closed) return;
         if (!light) {
           socket.close(1008, 'The requested light does not exist.');
+          return;
+        }
+        if (light.kind !== 'display') {
+          socket.close(1008, 'The requested fixture is not a web display.');
           return;
         }
         send(websocketMessage('state.snapshot', light));

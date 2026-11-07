@@ -2,6 +2,21 @@ export const PATTERNS = ['solid', 'breathe', 'pulse', 'strobe', 'rainbow', 'chas
 
 export type Pattern = (typeof PATTERNS)[number];
 
+export const FIXTURE_KINDS = ['display', 'wled'] as const;
+
+export type FixtureKind = (typeof FIXTURE_KINDS)[number];
+
+/**
+ * Connection details for a physical WLED fixture. The effect map is learned
+ * while the fixture is added, so semantic WebGlow patterns can select the
+ * closest available WLED effect without hard-coding a firmware-specific ID.
+ */
+export interface WledFixtureConfig {
+  url: string;
+  segment: number;
+  effectMap?: Partial<Record<Pattern, number>>;
+}
+
 export interface LightState {
   /** Whether the display should emit light. Settings are retained while off. */
   on: boolean;
@@ -23,6 +38,9 @@ export interface LightState {
 export interface LightResource {
   id: string;
   name: string;
+  kind: FixtureKind;
+  /** Present only for a physical WLED fixture. */
+  wled?: WledFixtureConfig;
   state: LightState;
   revision: number;
   updatedAt: string;
@@ -31,6 +49,8 @@ export interface LightResource {
 export interface CreateLightInput {
   id?: string;
   name?: string;
+  kind?: FixtureKind;
+  wled?: WledFixtureConfig;
 }
 
 export interface LightPatch {
@@ -43,6 +63,24 @@ export interface LightPatch {
   fadeMs?: number;
   phaseOffset?: number;
   expectedRevision?: number;
+}
+
+/** A saved console cue. The state is applied to its targets when the cue is run. */
+export interface SceneResource {
+  id: string;
+  name: string;
+  ids: 'all' | string[];
+  state: LightPatch;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSceneInput {
+  id: string;
+  name?: string;
+  ids: 'all' | string[];
+  state: LightPatch;
 }
 
 export const DEFAULT_LIGHT_STATE: Omit<LightState, 'patternStartedAt'> = {

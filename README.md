@@ -1,6 +1,6 @@
 # WebGlow
 
-WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display. Its password-protected browser portal has a multi-light scene engine for colour, brightness, fades, chases, and patterns, while the REST API remains available for Home Assistant and other automation. Updates reach open displays live over WebSocket and survive container restarts.
+WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display, and can also bring physical WLED devices into the same fixture sheet. Its password-protected portal is a console-style programmer with fixture selection, touch-first masters, faders, fades, patterns, chases, cue recording, and playback, while the REST API remains available for Home Assistant and other automation. Updates reach open displays live over WebSocket and survive container restarts.
 
 This is the first service layer for a future Home Assistant integration/add-on, Bitfocus Companion module, and Art-Net adapter. Those integrations are not included yet.
 
@@ -96,7 +96,7 @@ docker compose --env-file .env -f compose.portainer.yaml up --detach
 
 For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
 
-Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. Use **Setup** to set the public application URL, create displays, and copy their display links; use **Control** for individual or multi-light scenes and service metrics. The same lifecycle is available through the API:
+Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. **Control** is the console programmer and cue stack; **Setup** creates and manages fixtures; **Settings** contains server, container, account, and public-URL settings. The portal uses client-side navigation and includes a PWA manifest/service worker, so moving between these views does not reload the application.
 
 ```sh
 curl --request POST http://localhost:1828/api/v1/lights \
@@ -112,6 +112,7 @@ Example response:
   "light": {
     "id": "kitchen-tablet",
     "name": "Kitchen tablet",
+    "kind": "display",
     "state": {
       "on": false,
       "brightness": 100,
@@ -130,6 +131,21 @@ Example response:
 ```
 
 Open `http://<server-ip>:1828/display/kitchen-tablet` on the device. The light starts off deliberately, avoiding a surprise bright screen. Tap the small `i` button to enter fullscreen or request Wake Lock; both features require a user gesture and can vary by browser.
+
+### Add a WLED fixture
+
+In **Setup**, select **WLED device**, enter its reachable base address (for example, http://wled.local) and segment number, then connect it. WebGlow checks the device's JSON API before saving it, reads its current output, and learns the effect IDs available on that WLED build. The fixture then appears alongside web displays and receives programmer, batch, chase, blackout, restore, and cue commands.
+
+The same operation is available to an automation controller:
+
+~~~
+curl --request POST http://localhost:1828/api/v1/lights \
+  --header 'Authorization: Bearer replace-with-a-long-random-token' \
+  --header 'Content-Type: application/json' \
+  --data '{"id":"garden-pixels","name":"Garden pixels","kind":"wled","wled":{"url":"http://wled.local","segment":0}}'
+~~~
+
+WebGlow uses WLED's documented JSON API at /json and /json/state; the WLED device must be reachable from the WebGlow container. A WLED fixture is a physical output, so it does not have a display URL. Use **Refresh WLED** in Setup to pull its current state back into the console.
 
 ## Control it
 
@@ -189,18 +205,25 @@ All successful light resources have this shape:
 | `GET` | `/` | Browser portal to create, manage, and control lights. |
 | `GET` | `/api/v1/info` | API version and supported capabilities. |
 | `GET` | `/api/v1/lights` | List known logical lights. |
-| `POST` | `/api/v1/lights` | Create a light. Body accepts optional `id` and `name`. |
+| `POST` | `/api/v1/lights` | Create a web display, or a WLED fixture with `kind: "wled"` and a `wled` connection object. |
 | `GET` | `/api/v1/lights/:id` | Get an existing light. Returns `404` when it has not been created. |
 | `PATCH` | `/api/v1/lights/:id` | Update its name or state. Requires an existing light. |
+| `POST` | `/api/v1/lights/:id/wled/refresh` | Pull the current state from a WLED fixture. |
 | `POST` | `/api/v1/lights/batch` | Apply one output-state patch to all or selected lights. |
 | `POST` | `/api/v1/lights/chase` | Create a phase-spaced chase across all or selected lights. |
+| `GET` | `/api/v1/scenes` | List recorded console cues. |
+| `POST` | `/api/v1/scenes` | Record a cue with a number, target fixtures, and output state. |
+| `POST` | `/api/v1/scenes/:sceneId/go` | Run a recorded cue. |
+| `DELETE` | `/api/v1/scenes/:sceneId` | Delete a recorded cue. |
 | `GET` | `/api/v1/metrics` | Process, host, and WebGlow traffic snapshot. |
 | `GET` / `PATCH` | `/api/v1/settings` | Read or set the public application URL used in display links. |
 | `DELETE` | `/api/v1/lights/:id` | Remove a light and turn connected displays black. |
 | `GET` | `/display/:id` | Full-screen browser renderer for that light. |
 | `GET` | `/api/v1/ws?role=display&lightId=:id` | Display-only live state stream. |
 
-For multi-light automation, `POST /api/v1/lights/batch` accepts `{ "ids": "all" | ["id"], "state": { ...patch } }`. `POST /api/v1/lights/chase` accepts `ids`, `speed`, `fadeMs`, optional `color`, and optional `on`; it assigns evenly spaced phase offsets.
+For multi-light automation, `POST /api/v1/lights/batch` accepts `{ "ids": "all" | ["id"], "state": { ...patch } }`. `POST /api/v1/lights/chase` accepts `ids`, `speed`, `fadeMs`, optional `color`, and optional `on`; it assigns evenly spaced phase offsets. A console cue is recorded through `POST /api/v1/scenes` with an `id` such as `1` or `12.5`, a target `ids` value, and an output `state`.
+
+WLED fixtures accept the same output patches as displays. WebGlow translates brightness from 0–100 to WLED's 0–255 range, fade time to WLED transition units, colour to the configured segment, and semantic patterns to effect IDs discovered from that fixture. If an installed WLED build does not expose an equivalent effect, WebGlow still applies power, brightness, colour, speed, and fade without changing its active effect.
 
 The browser portal is protected by its own username/password session; the portal never stores an API token in the browser. Once a portal account exists, management API routes require either that portal session or `Authorization: Bearer <token>` when `WEBGLOW_API_TOKEN` is configured. Read/display routes remain unauthenticated so a device can open its display URL without putting a controller credential in the URL. Run WebGlow on a trusted network or place it behind an authenticated reverse proxy when that is not acceptable.
 
@@ -248,7 +271,7 @@ For photosensitivity safety, WebGlow constrains the browser strobe renderer to r
 | --- | --- | --- |
 | `PORT` | `1828` | HTTP and portal port. |
 | `HOST` | `0.0.0.0` | Bind address. |
-| `DATA_DIR` | `./data` locally, `/data` in Docker | Directory containing `lights.json` and the password-hash-only `settings.json`. |
+| `DATA_DIR` | `./data` locally, `/data` in Docker | Directory containing `lights.json`, the password-hash-only `settings.json`, and persisted console `scenes.json`. |
 | `WEBGLOW_API_TOKEN` | unset | Optional Bearer token for external automation such as Home Assistant. It does not log into the browser portal. |
 | `WEBGLOW_PASSWORD_RESET_TOKEN` | unset | Optional recovery secret for the Setup page's reset-password form. Set it before relying on password recovery. |
 | `WEBGLOW_CORS_ORIGIN` | `*` | Allowed CORS origin for REST controllers. Set a specific origin when a browser-based controller needs one. |
