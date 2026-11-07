@@ -1,11 +1,14 @@
 services:
   webglow:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "${WEBGLOW_PORT:-3000}:3000"
     environment:
-      # Set this in a local .env file before exposing the API beyond your trusted LAN.
-      WEBGLOW_API_TOKEN: ${WEBGLOW_API_TOKEN:-}
+      # Set this in a local .env file or Portainer stack variable before deployment.
+      WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"
+      WEBGLOW_CORS_ORIGIN: "${WEBGLOW_CORS_ORIGIN:-*}"
     volumes:
       - webglow-data:/data
     restart: unless-stopped

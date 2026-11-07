@@ -7,15 +7,93 @@ This is the first service layer for a future Home Assistant integration/add-on, 
 > [!IMPORTANT]
 > A web page cannot reliably change a phone or tablet's physical backlight level. `brightness` controls the brightness of the pixels WebGlow renders; set the device's hardware brightness manually for maximum light output.
 
-## Quick start with Docker
+## Docker deployment
 
-From this folder:
+The standard [compose.yaml](./compose.yaml) is intentionally a source-build file. For a local Docker deployment, **clone, then build locally**—do not run `docker compose pull` against this file. The separate image-only [compose.portainer.yaml](./compose.portainer.yaml) is for Portainer after the publish workflow has produced an image.
+
+On the Docker host, clone your repository, create an environment file, and choose a strong controller token:
 
 ```sh
-WEBGLOW_API_TOKEN='replace-with-a-long-random-token' docker compose up --build -d
+git clone https://github.com/jerielsr/webglow.git webglow
+cd webglow
+cp .env.example .env
+# Edit .env and replace WEBGLOW_API_TOKEN with a long random value.
+```
+
+Build and start the stack:
+
+```sh
+docker compose --env-file .env up --build --detach
 ```
 
 The service is then available at `http://<server-ip>:3000`. Its saved lights live in the named Docker volume `webglow-data`.
+
+Useful lifecycle commands:
+
+```sh
+# Confirm the container and its health state.
+docker compose --env-file .env ps
+
+# Follow application logs.
+docker compose --env-file .env logs --follow
+
+# Update after pulling newer source from your Git remote.
+git pull --ff-only
+docker compose --env-file .env up --build --detach
+
+# Stop the service without deleting saved lights.
+docker compose --env-file .env down
+```
+
+To use another host port, set `WEBGLOW_PORT` in `.env`; for example `WEBGLOW_PORT=8088` serves WebGlow on port `8088` while it continues to listen on port `3000` inside the container.
+
+### Deploy as a Portainer stack
+
+Portainer Git stacks should pull a prebuilt image rather than try to execute Compose `build:` steps. The image-only [compose.portainer.yaml](./compose.portainer.yaml) is provided for that purpose; [compose.yaml](./compose.yaml) remains the local source-build file.
+
+#### Publish the image once
+
+The included [publish-image.yml](./.github/workflows/publish-image.yml) GitHub Actions workflow builds `linux/amd64` and `linux/arm64` images and publishes them to GitHub Container Registry as `ghcr.io/jerielsr/webglow` whenever `main` is pushed. It adds `latest`, branch, tag, and commit-SHA tags.
+
+After pushing this repository to `main`:
+
+1. Wait for the **Publish container image** GitHub Actions workflow to finish successfully.
+2. Open the repository's **Packages** page and make the `webglow` container package public, or configure GHCR registry credentials in Portainer if you want to keep it private.
+3. Confirm the first image is available with:
+
+   ```sh
+   docker pull ghcr.io/jerielsr/webglow:latest
+   ```
+
+The workflow is included in this repository, but it cannot publish an image until these changes are committed and pushed. If you fork the repository or use another registry, set `WEBGLOW_IMAGE` to your image name in `.env` or Portainer instead.
+
+#### Portainer steps
+
+These steps target a Docker Standalone endpoint. In a Swarm deployment, the named volume is local to a node; use shared storage or pin the service to a suitable node before relying on it for persistent light state.
+
+1. Push this repository to a Git server that the Portainer host can reach.
+2. In Portainer, select **Stacks** → **Add stack** → **Repository**.
+3. Give the stack a name such as `webglow`, enter the repository URL and branch, and set the compose path to `compose.portainer.yaml`.
+4. Add stack environment variables:
+
+   | Variable | Value |
+   | --- | --- |
+   | `WEBGLOW_API_TOKEN` | A long random secret, for example the output of `openssl rand -hex 32`. |
+   | `WEBGLOW_PORT` | `3000`, or the host port you want to expose. |
+   | `WEBGLOW_CORS_ORIGIN` | Optional; keep `*` for the default or set your controller's exact origin. |
+   | `WEBGLOW_IMAGE` | Optional; defaults to `ghcr.io/jerielsr/webglow`. Set this for a fork or another registry. |
+   | `WEBGLOW_IMAGE_TAG` | Optional; defaults to `latest`. Pin a version tag for controlled upgrades. |
+
+5. Deploy the stack. Portainer pulls the image, creates the persistent `webglow-data` volume, and publishes the selected host port.
+
+For an equivalent command-line deployment after the image exists:
+
+```sh
+docker compose --env-file .env -f compose.portainer.yaml pull
+docker compose --env-file .env -f compose.portainer.yaml up --detach
+```
+
+For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
 
 Create a light and open the returned `displayPath` on the phone or tablet you want to use:
 

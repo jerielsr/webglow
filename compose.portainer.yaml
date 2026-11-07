@@ -1,0 +1,16 @@
+services:
+  webglow:
+    # This image is published by .github/workflows/publish-image.yml.
+    # Override WEBGLOW_IMAGE when using your own registry or a fork.
+    image: "${WEBGLOW_IMAGE:-ghcr.io/jerielsr/webglow}:${WEBGLOW_IMAGE_TAG:-latest}"
+    ports:
+      - "${WEBGLOW_PORT:-3000}:3000"
+    environment:
+      WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"
+      WEBGLOW_CORS_ORIGIN: "${WEBGLOW_CORS_ORIGIN:-*}"
+    volumes:
+      - webglow-data:/data
+    restart: unless-stopped
+
+volumes:
+  webglow-data:
