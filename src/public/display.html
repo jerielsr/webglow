@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="color-scheme" content="dark" />
+    <title>WebGlow display</title>
+    <link rel="stylesheet" href="/display.css" />
+  </head>
+  <body>
+    <main id="light-display" aria-describedby="connection-status">
+      <canvas id="light-canvas" aria-hidden="true"></canvas>
+
+      <p id="connection-status" class="connection-status" role="status" aria-live="polite">
+        Connecting…
+      </p>
+
+      <button
+        id="overlay-toggle"
+        class="corner-button"
+        type="button"
+        aria-controls="display-overlay"
+        aria-expanded="false"
+        title="Show display information and controls"
+      >
+        <span aria-hidden="true">i</span>
+        <span class="sr-only">Show display information and controls</span>
+      </button>
+
+      <aside id="display-overlay" class="display-overlay" aria-label="Display information" hidden>
+        <div class="overlay-card">
+          <div class="overlay-heading">
+            <div>
+              <p class="eyebrow">WebGlow display</p>
+              <h1 id="light-name">Loading light…</h1>
+              <p id="light-id" class="light-id"></p>
+            </div>
+            <button id="overlay-close" class="close-button" type="button" aria-label="Close display information">
+              ×
+            </button>
+          </div>
+
+          <dl class="light-details">
+            <div>
+              <dt>Connection</dt>
+              <dd id="connection-detail">Connecting…</dd>
+            </div>
+            <div>
+              <dt>Output</dt>
+              <dd id="state-detail">—</dd>
+            </div>
+            <div>
+              <dt>Pattern</dt>
+              <dd id="pattern-detail">—</dd>
+            </div>
+            <div>
+              <dt>Last update</dt>
+              <dd id="updated-detail">—</dd>
+            </div>
+          </dl>
+
+          <div class="overlay-actions">
+            <button id="fullscreen-button" class="action-button" type="button">Enter fullscreen</button>
+            <button id="wake-lock-button" class="action-button" type="button">Keep screen awake</button>
+          </div>
+
+          <div class="display-notes">
+            <p>Brightness changes the pixels shown here. Browsers cannot reliably change the device’s physical screen brightness.</p>
+            <p>For comfort and safety, strobe is limited to 0.5–3 Hz. Use the <kbd>i</kbd> button or press <kbd>H</kbd> to reopen this panel.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/display.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "webglow",
+  "version": "0.1.0",
+  "description": "Turn any browser into an API-controlled light display.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-static.mjs",
+    "check": "tsc --noEmit",
+    "start": "node --enable-source-maps dist/index.js",
+    "test": "npm run build && node --test test"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.1",
+    "@fastify/static": "^10.1.10",
+    "@fastify/websocket": "^11.3.7",
+    "fastify": "^5.12.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
