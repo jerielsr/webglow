@@ -7,8 +7,10 @@ export interface WebglowConfig {
   host: string;
   port: number;
   dataFile: string;
+  settingsFile: string;
   staticRoot: string;
   apiToken?: string;
+  passwordResetToken?: string;
   corsOrigin: string;
 }
 
@@ -28,13 +30,16 @@ function parsePort(value: string | undefined): number {
 export function getConfig(environment: NodeJS.ProcessEnv = process.env): WebglowConfig {
   const dataDirectory = resolve(environment.DATA_DIR ?? 'data');
   const configuredToken = environment.WEBGLOW_API_TOKEN?.trim();
+  const passwordResetToken = environment.WEBGLOW_PASSWORD_RESET_TOKEN?.trim();
 
   return {
     host: environment.HOST?.trim() || '0.0.0.0',
     port: parsePort(environment.PORT),
     dataFile: resolve(dataDirectory, 'lights.json'),
+    settingsFile: resolve(dataDirectory, 'settings.json'),
     staticRoot: DEFAULT_STATIC_ROOT,
     apiToken: configuredToken || undefined,
+    passwordResetToken: passwordResetToken || undefined,
     corsOrigin: environment.WEBGLOW_CORS_ORIGIN?.trim() || '*',
   };
 }

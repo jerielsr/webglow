@@ -8,6 +8,8 @@ services:
     environment:
       # Set this in a local .env file or Portainer stack variable before deployment.
       WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"
+      # Keep this separate from the portal password. It enables password recovery from Setup.
+      WEBGLOW_PASSWORD_RESET_TOKEN: "${WEBGLOW_PASSWORD_RESET_TOKEN:-}"
       WEBGLOW_CORS_ORIGIN: "${WEBGLOW_CORS_ORIGIN:-*}"
     volumes:
       - webglow-data:/data

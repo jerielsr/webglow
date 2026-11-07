@@ -1,4 +1,4 @@
-export const PATTERNS = ['solid', 'pulse', 'strobe', 'rainbow'] as const;
+export const PATTERNS = ['solid', 'breathe', 'pulse', 'strobe', 'rainbow', 'chase', 'twinkle'] as const;
 
 export type Pattern = (typeof PATTERNS)[number];
 
@@ -12,6 +12,10 @@ export interface LightState {
   pattern: Pattern;
   /** Pattern speed from 0 (slowest) to 100 (fastest). */
   speed: number;
+  /** Transition duration used when the display receives a new state. */
+  fadeMs: number;
+  /** Position within a multi-light effect, from 0 to 1. */
+  phaseOffset: number;
   /** Unix epoch milliseconds used to keep independently rendered patterns in step. */
   patternStartedAt: number;
 }
@@ -36,6 +40,8 @@ export interface LightPatch {
   color?: string;
   pattern?: Pattern;
   speed?: number;
+  fadeMs?: number;
+  phaseOffset?: number;
   expectedRevision?: number;
 }
 
@@ -45,6 +51,8 @@ export const DEFAULT_LIGHT_STATE: Omit<LightState, 'patternStartedAt'> = {
   color: '#FFFFFF',
   pattern: 'solid',
   speed: 50,
+  fadeMs: 0,
+  phaseOffset: 0,
 };
 
 export function isPattern(value: unknown): value is Pattern {

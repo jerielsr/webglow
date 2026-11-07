@@ -21,7 +21,10 @@ interface PersistedLights {
 function cloneLight(light: LightResource): LightResource {
   return {
     ...light,
-    state: { ...light.state },
+    state: {
+      ...DEFAULT_LIGHT_STATE,
+      ...light.state,
+    },
   };
 }
 
@@ -42,7 +45,9 @@ function hasPersistedLightShape(value: unknown): value is LightResource {
     typeof state.color === 'string' &&
     isPattern(state.pattern) &&
     typeof state.speed === 'number' &&
-    typeof state.patternStartedAt === 'number'
+    typeof state.patternStartedAt === 'number' &&
+    (state.fadeMs === undefined || typeof state.fadeMs === 'number') &&
+    (state.phaseOffset === undefined || typeof state.phaseOffset === 'number')
   );
 }
 
@@ -132,64 +137,52 @@ export class LightStore {
   }
 
   async update(id: string, patch: LightPatch): Promise<LightResource | undefined> {
-    const current = this.lights.get(id);
-    if (!current) {
-      return undefined;
+    const result = await this.updateMany([{ id, patch }]);
+    return result[0];
+  }
+
+  /** Apply state changes as one persisted update, then notify all affected displays. */
+  async updateMany(updates: Array<{ id: string; patch: LightPatch }>): Promise<LightResource[]> {
+    const uniqueIds = new Set(updates.map((update) => update.id));
+    if (uniqueIds.size !== updates.length) {
+      throw new Error('updateMany does not accept duplicate light IDs.');
     }
 
-    if (patch.expectedRevision !== undefined && patch.expectedRevision !== current.revision) {
-      throw new ApiError(
-        409,
-        'revision_conflict',
-        'The light changed since the revision supplied with this request.',
-        { expectedRevision: patch.expectedRevision, currentRevision: current.revision },
-      );
+    const currents = updates.map((update) => this.lights.get(update.id));
+    if (currents.some((light) => !light)) {
+      return [];
     }
 
-    const nextName = patch.name ?? current.name;
-    const nextState: LightState = {
-      ...current.state,
-      ...(patch.on === undefined ? {} : { on: patch.on }),
-      ...(patch.brightness === undefined ? {} : { brightness: patch.brightness }),
-      ...(patch.color === undefined ? {} : { color: patch.color }),
-      ...(patch.pattern === undefined ? {} : { pattern: patch.pattern }),
-      ...(patch.speed === undefined ? {} : { speed: patch.speed }),
-    };
-    const patternChanged = nextState.pattern !== current.state.pattern || nextState.speed !== current.state.speed;
-    if (patternChanged) {
-      nextState.patternStartedAt = Date.now();
+    const timestamp = Date.now();
+    const changed: Array<{ previous: LightResource; next: LightResource }> = [];
+    for (let index = 0; index < updates.length; index += 1) {
+      const current = currents[index] as LightResource;
+      const next = this.updatedResource(current, updates[index].patch, timestamp);
+      if (next !== current) {
+        changed.push({ previous: current, next });
+      }
     }
 
-    const changed =
-      nextName !== current.name ||
-      nextState.on !== current.state.on ||
-      nextState.brightness !== current.state.brightness ||
-      nextState.color !== current.state.color ||
-      nextState.pattern !== current.state.pattern ||
-      nextState.speed !== current.state.speed;
-
-    if (!changed) {
-      return cloneLight(current);
+    if (changed.length === 0) {
+      return currents.map((light) => cloneLight(light as LightResource));
     }
 
-    const next: LightResource = {
-      ...current,
-      name: nextName,
-      state: nextState,
-      revision: current.revision + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    this.lights.set(id, next);
+    for (const update of changed) {
+      this.lights.set(update.next.id, update.next);
+    }
     try {
       await this.persist();
     } catch (error) {
-      this.lights.set(id, current);
+      for (const update of changed) {
+        this.lights.set(update.previous.id, update.previous);
+      }
       throw error;
     }
 
-    const result = cloneLight(next);
-    this.events.emit('changed', result);
-    return result;
+    for (const update of changed) {
+      this.events.emit('changed', cloneLight(update.next));
+    }
+    return updates.map((update) => cloneLight(this.lights.get(update.id) as LightResource));
   }
 
   async remove(id: string): Promise<LightResource | undefined> {
@@ -240,5 +233,58 @@ export class LightStore {
     });
     this.pendingWrite = write;
     await write;
+  }
+
+  private updatedResource(current: LightResource, patch: LightPatch, timestamp: number): LightResource {
+    if (patch.expectedRevision !== undefined && patch.expectedRevision !== current.revision) {
+      throw new ApiError(
+        409,
+        'revision_conflict',
+        'The light changed since the revision supplied with this request.',
+        { expectedRevision: patch.expectedRevision, currentRevision: current.revision },
+      );
+    }
+
+    const currentState: LightState = { ...DEFAULT_LIGHT_STATE, ...current.state };
+    const nextName = patch.name ?? current.name;
+    const nextState: LightState = {
+      ...currentState,
+      ...(patch.on === undefined ? {} : { on: patch.on }),
+      ...(patch.brightness === undefined ? {} : { brightness: patch.brightness }),
+      ...(patch.color === undefined ? {} : { color: patch.color }),
+      ...(patch.pattern === undefined ? {} : { pattern: patch.pattern }),
+      ...(patch.speed === undefined ? {} : { speed: patch.speed }),
+      ...(patch.fadeMs === undefined ? {} : { fadeMs: patch.fadeMs }),
+      ...(patch.phaseOffset === undefined ? {} : { phaseOffset: patch.phaseOffset }),
+    };
+    const effectChanged =
+      nextState.pattern !== currentState.pattern ||
+      nextState.speed !== currentState.speed ||
+      nextState.phaseOffset !== currentState.phaseOffset;
+    if (effectChanged) {
+      nextState.patternStartedAt = timestamp;
+    }
+
+    const changed =
+      nextName !== current.name ||
+      nextState.on !== currentState.on ||
+      nextState.brightness !== currentState.brightness ||
+      nextState.color !== currentState.color ||
+      nextState.pattern !== currentState.pattern ||
+      nextState.speed !== currentState.speed ||
+      nextState.fadeMs !== currentState.fadeMs ||
+      nextState.phaseOffset !== currentState.phaseOffset;
+
+    if (!changed) {
+      return current;
+    }
+
+    return {
+      ...current,
+      name: nextName,
+      state: nextState,
+      revision: current.revision + 1,
+      updatedAt: new Date(timestamp).toISOString(),
+    };
   }
 }

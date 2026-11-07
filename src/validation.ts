@@ -1,6 +1,19 @@
 import { ApiError } from './errors.js';
 import { isPattern, type CreateLightInput, type LightPatch } from './types.js';
 
+export interface BatchLightPatchInput {
+  ids: 'all' | string[];
+  state: LightPatch;
+}
+
+export interface ChaseInput {
+  ids: 'all' | string[];
+  speed: number;
+  fadeMs: number;
+  color?: string;
+  on?: boolean;
+}
+
 const LIGHT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
 function asRecord(value: unknown, subject: string): Record<string, unknown> {
@@ -29,6 +42,35 @@ function validateNumber(value: unknown, field: string): number {
   }
 
   return value;
+}
+
+function validateBoundedNumber(value: unknown, field: string, minimum: number, maximum: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new ApiError(400, 'invalid_request', `${field} must be a number from ${minimum} to ${maximum}.`, {
+      field,
+    });
+  }
+
+  return value;
+}
+
+function validateTargetIds(value: unknown): 'all' | string[] {
+  if (value === 'all') {
+    return value;
+  }
+
+  if (!Array.isArray(value) || value.length === 0 || !value.every((id) => typeof id === 'string')) {
+    throw new ApiError(400, 'invalid_request', 'ids must be "all" or a non-empty array of light IDs.', {
+      field: 'ids',
+    });
+  }
+
+  const ids = value.map((id) => validateLightId(id));
+  if (new Set(ids).size !== ids.length) {
+    throw new ApiError(400, 'invalid_request', 'ids must not contain duplicates.', { field: 'ids' });
+  }
+
+  return ids;
 }
 
 export function validateLightId(value: string): string {
@@ -100,7 +142,17 @@ export function validateCreateLight(value: unknown): CreateLightInput {
 
 export function validateLightPatch(value: unknown): LightPatch {
   const record = asRecord(value, 'The request body');
-  rejectUnknownKeys(record, ['name', 'on', 'brightness', 'color', 'pattern', 'speed', 'expectedRevision']);
+  rejectUnknownKeys(record, [
+    'name',
+    'on',
+    'brightness',
+    'color',
+    'pattern',
+    'speed',
+    'fadeMs',
+    'phaseOffset',
+    'expectedRevision',
+  ]);
 
   if (Object.keys(record).length === 0) {
     throw new ApiError(400, 'invalid_request', 'Provide at least one field to update.');
@@ -124,14 +176,25 @@ export function validateLightPatch(value: unknown): LightPatch {
   }
   if (record.pattern !== undefined) {
     if (!isPattern(record.pattern)) {
-      throw new ApiError(400, 'invalid_request', 'pattern must be one of solid, pulse, strobe, or rainbow.', {
+      throw new ApiError(
+        400,
+        'invalid_request',
+        'pattern must be one of solid, breathe, pulse, strobe, rainbow, chase, or twinkle.',
+        {
         field: 'pattern',
-      });
+        },
+      );
     }
     patch.pattern = record.pattern;
   }
   if (record.speed !== undefined) {
     patch.speed = validateNumber(record.speed, 'speed');
+  }
+  if (record.fadeMs !== undefined) {
+    patch.fadeMs = validateBoundedNumber(record.fadeMs, 'fadeMs', 0, 60_000);
+  }
+  if (record.phaseOffset !== undefined) {
+    patch.phaseOffset = validateBoundedNumber(record.phaseOffset, 'phaseOffset', 0, 1);
   }
   if (record.expectedRevision !== undefined) {
     if (!Number.isInteger(record.expectedRevision) || (record.expectedRevision as number) < 0) {
@@ -143,4 +206,35 @@ export function validateLightPatch(value: unknown): LightPatch {
   }
 
   return patch;
+}
+
+export function validateBatchLightPatch(value: unknown): BatchLightPatchInput {
+  const record = asRecord(value, 'The request body');
+  rejectUnknownKeys(record, ['ids', 'state']);
+  const ids = validateTargetIds(record.ids);
+  const state = validateLightPatch(record.state);
+  if (state.name !== undefined || state.expectedRevision !== undefined) {
+    throw new ApiError(400, 'invalid_request', 'Batch state can only change light output fields.', { field: 'state' });
+  }
+  return { ids, state };
+}
+
+export function validateChase(value: unknown): ChaseInput {
+  const record = asRecord(value, 'The request body');
+  rejectUnknownKeys(record, ['ids', 'speed', 'fadeMs', 'color', 'on']);
+  const ids = validateTargetIds(record.ids);
+  const speed = validateNumber(record.speed, 'speed');
+  const fadeMs =
+    record.fadeMs === undefined ? 0 : validateBoundedNumber(record.fadeMs, 'fadeMs', 0, 60_000);
+  const input: ChaseInput = { ids, speed, fadeMs };
+  if (record.color !== undefined) {
+    input.color = normalizeColor(record.color);
+  }
+  if (record.on !== undefined) {
+    if (typeof record.on !== 'boolean') {
+      throw new ApiError(400, 'invalid_request', 'on must be a boolean.', { field: 'on' });
+    }
+    input.on = record.on;
+  }
+  return input;
 }

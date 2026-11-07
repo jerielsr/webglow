@@ -1,6 +1,6 @@
 # WebGlow
 
-WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display. Its browser portal creates and manages displays, while the REST API can set their on/off state, rendered brightness, colour, and pattern. Updates reach open displays live over WebSocket and survive container restarts.
+WebGlow turns a phone, tablet, or any modern browser into an API-controlled light display. Its password-protected browser portal has a multi-light scene engine for colour, brightness, fades, chases, and patterns, while the REST API remains available for Home Assistant and other automation. Updates reach open displays live over WebSocket and survive container restarts.
 
 This is the first service layer for a future Home Assistant integration/add-on, Bitfocus Companion module, and Art-Net adapter. Those integrations are not included yet.
 
@@ -11,13 +11,13 @@ This is the first service layer for a future Home Assistant integration/add-on, 
 
 The standard [compose.yaml](./compose.yaml) is intentionally a source-build file. For a local Docker deployment, **clone, then build locally**—do not run `docker compose pull` against this file. The separate image-only [compose.portainer.yaml](./compose.portainer.yaml) is for Portainer after the publish workflow has produced an image.
 
-On the Docker host, clone your repository, create an environment file, and choose a strong controller token:
+On the Docker host, clone your repository, create an environment file, and choose strong, separate secrets for automation and password recovery:
 
 ```sh
 git clone https://github.com/jerielsr/webglow.git webglow
 cd webglow
 cp .env.example .env
-# Edit .env and replace WEBGLOW_API_TOKEN with a long random value.
+# Edit .env and replace both generated-secret placeholders with long random values.
 ```
 
 Build and start the stack:
@@ -78,7 +78,8 @@ These steps target a Docker Standalone endpoint. In a Swarm deployment, the name
 
    | Variable | Value |
    | --- | --- |
-   | `WEBGLOW_API_TOKEN` | A long random secret, for example the output of `openssl rand -hex 32`. |
+   | `WEBGLOW_API_TOKEN` | Optional automation/API Bearer token; use a long random value, for example the output of `openssl rand -hex 32`. |
+   | `WEBGLOW_PASSWORD_RESET_TOKEN` | A different long random recovery secret used only to reset the portal password. |
    | `WEBGLOW_PORT` | `1828`, or the host port you want to expose. |
    | `WEBGLOW_CORS_ORIGIN` | Optional; keep `*` for the default or set your controller's exact origin. |
    | `WEBGLOW_IMAGE` | Optional; defaults to `ghcr.io/jerielsr/webglow`. Set this for a fork or another registry. |
@@ -95,7 +96,7 @@ docker compose --env-file .env -f compose.portainer.yaml up --detach
 
 For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
 
-Open the portal at `http://<server-ip>:1828`, add your API token in **Controller access** when prompted, and create a light. It provides the display link to open on the phone or tablet. The same lifecycle is available through the API:
+Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. Use **Setup** to set the public application URL, create displays, and copy their display links; use **Control** for individual or multi-light scenes and service metrics. The same lifecycle is available through the API:
 
 ```sh
 curl --request POST http://localhost:1828/api/v1/lights \
@@ -117,6 +118,8 @@ Example response:
       "color": "#FFFFFF",
       "pattern": "solid",
       "speed": 50,
+      "fadeMs": 0,
+      "phaseOffset": 0,
       "patternStartedAt": 1760000000000
     },
     "revision": 0,
@@ -171,6 +174,8 @@ All successful light resources have this shape:
     "color": "#00D9FF",
     "pattern": "solid",
     "speed": 35,
+    "fadeMs": 0,
+    "phaseOffset": 0,
     "patternStartedAt": 1760000000000
   },
   "revision": 2,
@@ -187,11 +192,17 @@ All successful light resources have this shape:
 | `POST` | `/api/v1/lights` | Create a light. Body accepts optional `id` and `name`. |
 | `GET` | `/api/v1/lights/:id` | Get an existing light. Returns `404` when it has not been created. |
 | `PATCH` | `/api/v1/lights/:id` | Update its name or state. Requires an existing light. |
+| `POST` | `/api/v1/lights/batch` | Apply one output-state patch to all or selected lights. |
+| `POST` | `/api/v1/lights/chase` | Create a phase-spaced chase across all or selected lights. |
+| `GET` | `/api/v1/metrics` | Process, host, and WebGlow traffic snapshot. |
+| `GET` / `PATCH` | `/api/v1/settings` | Read or set the public application URL used in display links. |
 | `DELETE` | `/api/v1/lights/:id` | Remove a light and turn connected displays black. |
 | `GET` | `/display/:id` | Full-screen browser renderer for that light. |
 | `GET` | `/api/v1/ws?role=display&lightId=:id` | Display-only live state stream. |
 
-When `WEBGLOW_API_TOKEN` is set, `POST` and `PATCH` require `Authorization: Bearer <token>`. Read/display routes remain unauthenticated so a device can open its display URL without putting a controller credential in the URL. Run WebGlow on a trusted network or place it behind an authenticated reverse proxy when that is not acceptable.
+For multi-light automation, `POST /api/v1/lights/batch` accepts `{ "ids": "all" | ["id"], "state": { ...patch } }`. `POST /api/v1/lights/chase` accepts `ids`, `speed`, `fadeMs`, optional `color`, and optional `on`; it assigns evenly spaced phase offsets.
+
+The browser portal is protected by its own username/password session; the portal never stores an API token in the browser. Once a portal account exists, management API routes require either that portal session or `Authorization: Bearer <token>` when `WEBGLOW_API_TOKEN` is configured. Read/display routes remain unauthenticated so a device can open its display URL without putting a controller credential in the URL. Run WebGlow on a trusted network or place it behind an authenticated reverse proxy when that is not acceptable.
 
 `PATCH` accepts any combination of the following fields:
 
@@ -201,8 +212,10 @@ When `WEBGLOW_API_TOKEN` is set, `POST` and `PATCH` require `Authorization: Bear
 | `on` | Boolean. `false` renders black but retains settings. |
 | `brightness` | Number from `0` to `100`; rendered brightness, not physical device brightness. |
 | `color` | Three- or six-digit CSS hex colour, such as `#0AB` or `#00AABB`. |
-| `pattern` | `solid`, `pulse`, `strobe`, or `rainbow`. |
+| `pattern` | `solid`, `breathe`, `pulse`, `strobe`, `rainbow`, `chase`, or `twinkle`. |
 | `speed` | Number from `0` to `100`. It changes animation speed. |
+| `fadeMs` | Number from `0` to `60000`. Display transition duration in milliseconds. |
+| `phaseOffset` | Number from `0` to `1` used to space a multi-light effect. |
 | `expectedRevision` | Optional current revision for optimistic concurrency; a stale value returns `409`. |
 
 The API rejects unknown fields and returns errors as:
@@ -235,8 +248,9 @@ For photosensitivity safety, WebGlow constrains the browser strobe renderer to r
 | --- | --- | --- |
 | `PORT` | `1828` | HTTP and portal port. |
 | `HOST` | `0.0.0.0` | Bind address. |
-| `DATA_DIR` | `./data` locally, `/data` in Docker | Directory containing `lights.json`. |
-| `WEBGLOW_API_TOKEN` | unset | Optional Bearer token that protects controller endpoints. Set this in real deployments. |
+| `DATA_DIR` | `./data` locally, `/data` in Docker | Directory containing `lights.json` and the password-hash-only `settings.json`. |
+| `WEBGLOW_API_TOKEN` | unset | Optional Bearer token for external automation such as Home Assistant. It does not log into the browser portal. |
+| `WEBGLOW_PASSWORD_RESET_TOKEN` | unset | Optional recovery secret for the Setup page's reset-password form. Set it before relying on password recovery. |
 | `WEBGLOW_CORS_ORIGIN` | `*` | Allowed CORS origin for REST controllers. Set a specific origin when a browser-based controller needs one. |
 
 ## Local development

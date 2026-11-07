@@ -85,6 +85,8 @@ test('creates a light and updates its rendered state', async () => {
       color: '#FFFFFF',
       pattern: 'solid',
       speed: 50,
+      fadeMs: 0,
+      phaseOffset: 0,
       patternStartedAt: created.json().light.state.patternStartedAt,
     });
     assert.equal(created.json().displayPath, '/display/phone-1');
@@ -99,6 +101,8 @@ test('creates a light and updates its rendered state', async () => {
         color: '#0aB',
         pattern: 'pulse',
         speed: 25,
+        fadeMs: 1250,
+        phaseOffset: 0.25,
         expectedRevision: 0,
       },
     });
@@ -111,6 +115,8 @@ test('creates a light and updates its rendered state', async () => {
       color: '#00AABB',
       pattern: 'pulse',
       speed: 25,
+      fadeMs: 1250,
+      phaseOffset: 0.25,
       patternStartedAt: updated.json().state.patternStartedAt,
     });
     assert.equal(updated.json().revision, 1);
@@ -127,7 +133,11 @@ test('serves the portal and requires lights to be created before they can be fet
     const portal = await app.inject({ method: 'GET', url: '/' });
     assert.equal(portal.statusCode, 200);
     assert.match(portal.headers['content-type'], /^text\/html/);
-    assert.match(portal.body, /WebGlow portal/);
+    assert.match(portal.body, /WebGlow Control/);
+
+    const setup = await app.inject({ method: 'GET', url: '/setup' });
+    assert.equal(setup.statusCode, 200);
+    assert.match(setup.body, /WebGlow Setup/);
 
     const missing = await app.inject({ method: 'GET', url: '/api/v1/lights/tablet' });
     assert.equal(missing.statusCode, 404);
@@ -199,6 +209,124 @@ test('protects control routes when WEBGLOW_API_TOKEN is configured', async () =>
       assert.equal(deleteWithoutToken.statusCode, 401);
     },
     { apiToken: 'secret-token' },
+  );
+});
+
+test('uses a portal session for protected management and persists display settings', async () => {
+  await withApp(
+    async (app) => {
+      const beforeSetup = await app.inject({ method: 'GET', url: '/api/v1/auth/status' });
+      assert.equal(beforeSetup.json().setupRequired, true);
+
+      const account = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/setup',
+        payload: { username: 'portal-admin', password: 'a-long-test-password' },
+      });
+      assert.equal(account.statusCode, 201);
+      const cookieHeader = Array.isArray(account.headers['set-cookie'])
+        ? account.headers['set-cookie'][0]
+        : account.headers['set-cookie'];
+      assert.ok(cookieHeader);
+      const sessionCookie = cookieHeader.split(';')[0];
+
+      const unauthenticated = await app.inject({ method: 'GET', url: '/api/v1/lights' });
+      assert.equal(unauthenticated.statusCode, 401);
+
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/lights',
+        headers: { cookie: sessionCookie },
+        payload: { id: 'portal-light' },
+      });
+      assert.equal(created.statusCode, 201);
+
+      const settings = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/settings',
+        headers: { cookie: sessionCookie },
+        payload: { publicBaseUrl: 'https://lights.example.test/webglow/' },
+      });
+      assert.equal(settings.statusCode, 200);
+      assert.equal(settings.json().publicBaseUrl, 'https://lights.example.test/webglow');
+
+      const metrics = await app.inject({
+        method: 'GET',
+        url: '/api/v1/metrics',
+        headers: { cookie: sessionCookie },
+      });
+      assert.equal(metrics.statusCode, 200);
+      assert.equal(typeof metrics.json().process.rssBytes, 'number');
+    },
+    { apiToken: 'automation-token', passwordResetToken: 'recovery-token' },
+  );
+});
+
+test('updates groups and creates phased chases', async () => {
+  await withApp(async (app) => {
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'left' } });
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'right' } });
+
+    const batch = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights/batch',
+      payload: {
+        ids: 'all',
+        state: { on: true, color: '#1ac', brightness: 68, pattern: 'twinkle', speed: 32, fadeMs: 500 },
+      },
+    });
+    assert.equal(batch.statusCode, 200);
+    assert.equal(batch.json().count, 2);
+    assert.equal(batch.json().lights[0].state.color, '#11AACC');
+    assert.equal(batch.json().lights[1].state.fadeMs, 500);
+
+    const chase = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights/chase',
+      payload: { ids: ['left', 'right'], speed: 62, fadeMs: 1000, color: '#f80' },
+    });
+    assert.equal(chase.statusCode, 200);
+    assert.equal(chase.json().count, 2);
+    assert.deepEqual(
+      chase.json().lights.map((light) => light.state.phaseOffset),
+      [0, 0.5],
+    );
+    assert.ok(chase.json().lights.every((light) => light.state.pattern === 'chase' && light.state.on));
+  });
+});
+
+test('resets portal access using the configured recovery token', async () => {
+  await withApp(
+    async (app) => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/setup',
+        payload: { username: 'reset-user', password: 'an-initial-password' },
+      });
+      assert.equal(created.statusCode, 201);
+
+      const badReset = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/reset-password',
+        payload: { username: 'reset-user', resetToken: 'wrong', newPassword: 'a-new-safe-password' },
+      });
+      assert.equal(badReset.statusCode, 401);
+
+      const reset = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/reset-password',
+        payload: { username: 'reset-user', resetToken: 'recovery-token', newPassword: 'a-new-safe-password' },
+      });
+      assert.equal(reset.statusCode, 204);
+
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username: 'reset-user', password: 'a-new-safe-password' },
+      });
+      assert.equal(login.statusCode, 200);
+    },
+    { passwordResetToken: 'recovery-token' },
   );
 });
 

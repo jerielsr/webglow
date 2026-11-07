@@ -8,7 +8,7 @@
   const SOCKET_CONNECT_TIMEOUT_MS = 8_000;
   const MIN_EFFECT_HZ = 0.5;
   const MAX_EFFECT_HZ = 3;
-  const ALLOWED_PATTERNS = new Set(["solid", "pulse", "strobe", "rainbow"]);
+  const ALLOWED_PATTERNS = new Set(["solid", "breathe", "pulse", "strobe", "rainbow", "chase", "twinkle"]);
 
   const canvas = document.querySelector("#light-canvas");
   const context = canvas.getContext("2d", { alpha: false });
@@ -31,6 +31,8 @@
     color: "#ffffff",
     pattern: "solid",
     speed: 0,
+    fadeMs: 0,
+    phaseOffset: 0,
   });
 
   const lightId = getLightIdFromPath();
@@ -60,6 +62,7 @@
   let canvasHeight = 0;
   let devicePixelRatio = 1;
   let connection = { state: "initial", message: "" };
+  let transition = null;
 
   const colorScratch = document.createElement("canvas");
   colorScratch.width = 1;
@@ -140,6 +143,8 @@
         color: normaliseColor(rawState.color, defaultState.color),
         pattern: normalisePattern(rawState.pattern),
         speed: clamp(rawState.speed, 0, 100, defaultState.speed),
+        fadeMs: clamp(rawState.fadeMs, 0, 60000, defaultState.fadeMs),
+        phaseOffset: clamp(rawState.phaseOffset, 0, 1, defaultState.phaseOffset),
         // Optional: newer servers provide this to keep many displays in phase.
         patternStartedAt: Number.isFinite(patternStartedAt) && patternStartedAt > 0 ? patternStartedAt : 0,
       },
@@ -185,6 +190,24 @@
       light.updatedAt !== nextLight.updatedAt ||
       light.state.speed !== nextLight.state.speed ||
       light.state.patternStartedAt !== nextLight.state.patternStartedAt;
+
+    const visualChanged =
+      light.state.on !== nextLight.state.on ||
+      light.state.brightness !== nextLight.state.brightness ||
+      light.state.color !== nextLight.state.color;
+    if (visualChanged && nextLight.state.fadeMs > 0) {
+      transition = {
+        from: {
+          on: light.state.on,
+          brightness: light.state.brightness,
+          color: light.state.color,
+        },
+        startedAt: Date.now(),
+        duration: nextLight.state.fadeMs,
+      };
+    } else if (visualChanged) {
+      transition = null;
+    }
 
     light = nextLight;
     lastRevision = nextLight.revision;
@@ -509,6 +532,14 @@
     };
   }
 
+  function mixRgb(from, to, progress) {
+    return {
+      red: Math.round(from.red + (to.red - from.red) * progress),
+      green: Math.round(from.green + (to.green - from.green) * progress),
+      blue: Math.round(from.blue + (to.blue - from.blue) * progress),
+    };
+  }
+
   function rgbCss(rgb) {
     return `rgb(${rgb.red} ${rgb.green} ${rgb.blue})`;
   }
@@ -601,7 +632,21 @@
     }
 
     const state = light.state;
-    if (!state.on || state.brightness <= 0) {
+    let active = state.on;
+    let brightness = state.brightness;
+    let rgb = colourToRgb(state.color);
+    if (transition) {
+      const progress = Math.min(1, Math.max(0, (Date.now() - transition.startedAt) / transition.duration));
+      const fromBrightness = transition.from.on ? transition.from.brightness : 0;
+      const toBrightness = state.on ? state.brightness : 0;
+      brightness = fromBrightness + (toBrightness - fromBrightness) * progress;
+      rgb = mixRgb(colourToRgb(transition.from.color), rgb, progress);
+      active = brightness > 0;
+      if (progress >= 1) {
+        transition = null;
+      }
+    }
+    if (!active || brightness <= 0) {
       fillBlack();
       window.requestAnimationFrame(render);
       return;
@@ -609,12 +654,10 @@
 
     const elapsedSeconds = Math.max(0, (Date.now() - effectStartedAtMs) / 1_000);
     const frequency = speedToFrequency(state.speed);
-    const rgb = colourToRgb(state.color);
-    let brightness = state.brightness;
-
-    if (state.pattern === "pulse") {
+    if (state.pattern === "breathe" || state.pattern === "pulse") {
       const phase = elapsedSeconds * frequency * Math.PI * 2;
-      const envelope = 0.12 + 0.88 * (0.5 - 0.5 * Math.cos(phase));
+      const floor = state.pattern === "breathe" ? 0.28 : 0.08;
+      const envelope = floor + (1 - floor) * (0.5 - 0.5 * Math.cos(phase));
       brightness *= envelope;
     } else if (state.pattern === "strobe") {
       const phase = (elapsedSeconds * frequency) % 1;
@@ -627,6 +670,14 @@
       drawRainbow(rgbToHue(rgb), brightness, elapsedSeconds, frequency);
       window.requestAnimationFrame(render);
       return;
+    } else if (state.pattern === "chase") {
+      const phase = (elapsedSeconds * frequency + state.phaseOffset) % 1;
+      const distance = Math.abs(phase - 0.5) * 2;
+      brightness *= 0.08 + 0.92 * (1 - distance) ** 3;
+    } else if (state.pattern === "twinkle") {
+      const seed = Math.sin((elapsedSeconds * frequency + state.phaseOffset * 13.37) * 9.71);
+      const sparkle = Math.max(0.12, seed > 0.72 ? 1 : 0.22 + ((seed + 1) / 2) * 0.26);
+      brightness *= sparkle;
     }
 
     context.fillStyle = rgbCss(scaleRgb(rgb, brightness));

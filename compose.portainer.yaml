@@ -7,6 +7,7 @@ services:
       - "${WEBGLOW_PORT:-1828}:1828"
     environment:
       WEBGLOW_API_TOKEN: "${WEBGLOW_API_TOKEN:-}"
+      WEBGLOW_PASSWORD_RESET_TOKEN: "${WEBGLOW_PASSWORD_RESET_TOKEN:-}"
       WEBGLOW_CORS_ORIGIN: "${WEBGLOW_CORS_ORIGIN:-*}"
     volumes:
       - webglow-data:/data
