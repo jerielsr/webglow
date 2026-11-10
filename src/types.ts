@@ -17,6 +17,12 @@ export interface WledFixtureConfig {
   effectMap?: Partial<Record<Pattern, number>>;
 }
 
+/** Identifies a browser display created through the public guest join page. */
+export interface GuestFixtureConfig {
+  registeredAt: string;
+  displayName: string;
+}
+
 export interface LightState {
   /** Whether the display should emit light. Settings are retained while off. */
   on: boolean;
@@ -41,6 +47,8 @@ export interface LightResource {
   kind: FixtureKind;
   /** Present only for a physical WLED fixture. */
   wled?: WledFixtureConfig;
+  /** Present only for a display registered by a guest. */
+  guest?: GuestFixtureConfig;
   state: LightState;
   revision: number;
   updatedAt: string;
@@ -51,6 +59,7 @@ export interface CreateLightInput {
   name?: string;
   kind?: FixtureKind;
   wled?: WledFixtureConfig;
+  guest?: GuestFixtureConfig;
 }
 
 export interface LightPatch {

@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 import cookie from '@fastify/cookie';
@@ -6,6 +6,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from 'fastify';
+import QRCode from 'qrcode';
 
 import { getConfig, type WebglowConfig } from './config.js';
 import { ApiError } from './errors.js';
@@ -23,6 +24,7 @@ import {
   validateCreateLight,
   validateLightId,
   validateLightPatch,
+  validateName,
   validateSceneId,
 } from './validation.js';
 
@@ -151,6 +153,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await Promise.all([store.initialize(), settings.initialize(), scenes.initialize()]);
   const portalAuth = new PortalAuth(settings, config.passwordResetToken);
   const metrics = new Metrics();
+  const guestConnections = new Map<string, number>();
+  const guestRegistrationAttempts = new Map<string, { count: number; resetAt: number }>();
+  let guestOutboundWebsocketBytes = 0;
 
   const app = Fastify({ logger: options.logger ?? true, trustProxy: true });
 
@@ -179,6 +184,47 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   function clearSessionCookie(reply: { clearCookie: Function }): void {
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
+  }
+
+  function guestJoinUrl(request: FastifyRequest): string {
+    const configured = settings.getPublicSettings().publicBaseUrl;
+    const base = configured ?? request.protocol + '://' + (request.headers.host ?? 'localhost');
+    return new URL('join', base.replace(/\/$/, '') + '/').toString();
+  }
+
+  function noteGuestRegistration(request: FastifyRequest): void {
+    const now = Date.now();
+    const key = request.ip;
+    const current = guestRegistrationAttempts.get(key);
+    const windowState = !current || current.resetAt <= now ? { count: 0, resetAt: now + 10 * 60_000 } : current;
+    if (windowState.count >= 12) {
+      throw new ApiError(429, 'guest_registration_rate_limited', 'Too many guest registrations from this network. Try again in a few minutes.');
+    }
+    windowState.count += 1;
+    guestRegistrationAttempts.set(key, windowState);
+  }
+
+  async function guestSnapshot(request: FastifyRequest) {
+    const guests = (await store.list()).filter((light) => light.guest);
+    const active = guests.filter((light) => (guestConnections.get(light.id) ?? 0) > 0);
+    const guestState = guests.map((light) => ({
+      id: light.id,
+      name: light.guest?.displayName ?? light.name,
+      connected: (guestConnections.get(light.id) ?? 0) > 0,
+      registeredAt: light.guest?.registeredAt,
+    }));
+    return {
+      registrationEnabled: settings.getPublicSettings().guestRegistrationEnabled,
+      joinUrl: guestJoinUrl(request),
+      registered: guests.length,
+      active: active.length,
+      activeSockets: active.reduce((total, light) => total + (guestConnections.get(light.id) ?? 0), 0),
+      resources: {
+        persistedStateBytes: Buffer.byteLength(JSON.stringify(guests)),
+        outboundWebsocketBytes: guestOutboundWebsocketBytes,
+      },
+      guests: guestState,
+    };
   }
 
   function hasOutputPatch(patch: LightPatch): boolean {
@@ -295,6 +341,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/setup', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/settings', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
+  app.get('/join', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('join.html'));
   app.get('/healthz', async () => ({ status: 'ok' }));
 
   app.get('/api/v1/info', async () => ({
@@ -397,16 +444,59 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.patch<{ Body: unknown }>('/api/v1/settings', async (request) => {
     requireControllerAccess(request);
     const body = asRecord(request.body, 'The request body');
-    rejectKeys(body, ['publicBaseUrl']);
-    if (!Object.hasOwn(body, 'publicBaseUrl')) {
-      throw new ApiError(400, 'invalid_request', 'Provide publicBaseUrl to update settings.');
+    rejectKeys(body, ['publicBaseUrl', 'guestRegistrationEnabled']);
+    if (!Object.hasOwn(body, 'publicBaseUrl') && !Object.hasOwn(body, 'guestRegistrationEnabled')) {
+      throw new ApiError(400, 'invalid_request', 'Provide a setting to update.');
     }
-    return settings.setPublicBaseUrl(validatePublicBaseUrl(body.publicBaseUrl));
+    if (body.guestRegistrationEnabled !== undefined && typeof body.guestRegistrationEnabled !== 'boolean') {
+      throw new ApiError(400, 'invalid_request', 'guestRegistrationEnabled must be true or false.', {
+        field: 'guestRegistrationEnabled',
+      });
+    }
+    return settings.updatePublicSettings({
+      ...(Object.hasOwn(body, 'publicBaseUrl') ? { publicBaseUrl: validatePublicBaseUrl(body.publicBaseUrl) } : {}),
+      ...(Object.hasOwn(body, 'guestRegistrationEnabled') ? { guestRegistrationEnabled: body.guestRegistrationEnabled as boolean } : {}),
+    });
   });
 
   app.get('/api/v1/metrics', async (request) => {
     requireControllerAccess(request);
     return metrics.snapshot();
+  });
+
+  app.get('/api/v1/guests', async (request) => {
+    requireControllerAccess(request);
+    return guestSnapshot(request);
+  });
+
+  app.get('/api/v1/guest-registration', async () => ({
+    enabled: settings.getPublicSettings().guestRegistrationEnabled,
+  }));
+
+  app.get('/api/v1/guest-registration/qr', async (request, reply) => {
+    requireControllerAccess(request);
+    if (!settings.getPublicSettings().guestRegistrationEnabled) {
+      throw new ApiError(409, 'guest_registration_disabled', 'Enable guest registration before sharing a QR code.');
+    }
+    const svg = await QRCode.toString(guestJoinUrl(request), { type: 'svg', width: 360, margin: 1 });
+    return reply.header('Cache-Control', 'no-store').type('image/svg+xml').send(svg);
+  });
+
+  app.post<{ Body: unknown }>('/api/v1/guest-registration', async (request, reply) => {
+    if (!settings.getPublicSettings().guestRegistrationEnabled) {
+      throw new ApiError(403, 'guest_registration_disabled', 'Guest registration is not currently enabled.');
+    }
+    const body = asRecord(request.body, 'The request body');
+    rejectKeys(body, ['name']);
+    noteGuestRegistration(request);
+    const displayName = validateName(body.name);
+    const light = await store.create({
+      id: 'guest-' + randomUUID().slice(0, 8),
+      name: displayName + "'s light",
+      kind: 'display',
+      guest: { displayName, registeredAt: new Date().toISOString() },
+    });
+    return reply.status(201).send({ light, displayPath: displayPath(light.id) });
   });
 
   app.get('/api/v1/lights', async (request) => {
@@ -588,11 +678,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
     let unsubscribe: (() => void) | undefined;
     let closed = false;
+    let guestConnection = false;
     metrics.websocketOpened();
     const cleanup = () => {
       if (closed) return;
       closed = true;
       metrics.websocketClosed();
+      if (guestConnection) {
+        const remaining = Math.max(0, (guestConnections.get(lightId) ?? 1) - 1);
+        if (remaining === 0) guestConnections.delete(lightId);
+        else guestConnections.set(lightId, remaining);
+        guestConnection = false;
+      }
       unsubscribe?.();
       unsubscribe = undefined;
     };
@@ -601,7 +698,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const send = (message: string) => {
       if (!closed && socket.readyState === 1) {
         socket.send(message);
-        metrics.recordResponse(Buffer.byteLength(message));
+        const size = Buffer.byteLength(message);
+        metrics.recordResponse(size);
+        if (guestConnection) guestOutboundWebsocketBytes += size;
       }
     };
 
@@ -616,6 +715,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         if (light.kind !== 'display') {
           socket.close(1008, 'The requested fixture is not a web display.');
           return;
+        }
+        if (light.guest) {
+          guestConnection = true;
+          guestConnections.set(lightId, (guestConnections.get(lightId) ?? 0) + 1);
         }
         send(websocketMessage('state.snapshot', light));
         const unsubscribeChanged = store.onChange((changedLight) => {

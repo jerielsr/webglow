@@ -276,6 +276,64 @@ test('uses a portal session for protected management and persists display settin
   );
 });
 
+test('registers guest display lights and exposes the share QR and resource summary', async () => {
+  await withApp(async (app) => {
+    const closed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/guest-registration',
+      payload: { name: 'Guest One' },
+    });
+    assert.equal(closed.statusCode, 403);
+
+    const settings = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/settings',
+      payload: { guestRegistrationEnabled: true },
+    });
+    assert.equal(settings.statusCode, 200);
+    assert.equal(settings.json().guestRegistrationEnabled, true);
+
+    const status = await app.inject({ method: 'GET', url: '/api/v1/guest-registration' });
+    assert.deepEqual(status.json(), { enabled: true });
+
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/v1/guest-registration',
+      payload: { name: 'Guest One' },
+    });
+    assert.equal(registered.statusCode, 201);
+    assert.match(registered.json().light.id, /^guest-/);
+    assert.equal(registered.json().light.name, "Guest One's light");
+    assert.equal(registered.json().light.guest.displayName, 'Guest One');
+    assert.equal(registered.json().displayPath, '/display/' + registered.json().light.id);
+
+    const qr = await app.inject({ method: 'GET', url: '/api/v1/guest-registration/qr' });
+    assert.equal(qr.statusCode, 200);
+    assert.match(qr.headers['content-type'], /^image\/svg\+xml/);
+    assert.match(qr.body, /<svg/);
+
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    assert.ok(address && typeof address !== 'string');
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${address.port}/api/v1/ws?role=display&lightId=${registered.json().light.id}`,
+    );
+    const snapshotPromise = waitForWebSocketMessage(socket);
+    await waitForWebSocketOpen(socket);
+    assert.equal((await snapshotPromise).type, 'state.snapshot');
+
+    const summary = await app.inject({ method: 'GET', url: '/api/v1/guests' });
+    assert.equal(summary.statusCode, 200);
+    assert.equal(summary.json().registered, 1);
+    assert.equal(summary.json().active, 1);
+    assert.equal(summary.json().activeSockets, 1);
+    assert.equal(summary.json().guests[0].name, 'Guest One');
+    assert.ok(summary.json().resources.persistedStateBytes > 0);
+    assert.ok(summary.json().resources.outboundWebsocketBytes > 0);
+    socket.close();
+  });
+});
+
 test('updates groups and creates phased chases', async () => {
   await withApp(async (app) => {
     await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'left' } });

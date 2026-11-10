@@ -104,6 +104,7 @@
             </div>
             <div class="master-actions"><button id="restore-output" class="console-button subtle-button" type="button">Restore output</button><button id="master-blackout" class="console-button danger-button" type="button">Blackout</button></div>
             <div id="metrics-list" class="console-metrics" aria-live="polite"></div>
+            <div class="guest-monitor"><div><span>Guest lights</span><b id="guest-active-count">0 active</b></div><div><span>Registered</span><b id="guest-registered-count">0</b></div><div><span>Guest sockets</span><b id="guest-sockets">0</b></div><div><span>Guest traffic</span><b id="guest-traffic">0 B</b></div><div><span>Guest state</span><b id="guest-state-bytes">0 B</b></div></div>
           </aside>
         </div>
 
@@ -179,6 +180,15 @@
             <p class="console-copy">Portal access uses a secure session. External controllers use the optional Bearer token configured in Docker.</p>
             <ul class="console-list"><li>GET /api/v1/lights</li><li>POST /api/v1/lights/batch</li><li>POST /api/v1/scenes/:cue/go</li></ul>
             <button id="install-app" class="console-button subtle-button" type="button" hidden>Install WebGlow</button>
+          </section>
+          <section class="console-panel guest-settings-panel">
+            <div class="console-panel-heading"><div><p>Guest lights</p><h1>Audience registration</h1></div></div>
+            <p class="console-copy">Open registration only when you are ready to share the join link or QR code. Each guest receives an individually controllable browser light.</p>
+            <form id="guest-registration-form" class="console-form">
+              <label class="guest-toggle"><input id="guest-registration-enabled" type="checkbox" /><span>Allow guests to register lights</span></label>
+              <div><button class="console-button go-button" type="submit">Save guest access</button><button id="copy-guest-url" class="console-button subtle-button" type="button">Copy join URL</button></div>
+            </form>
+            <div id="guest-share" class="guest-share" hidden><code id="guest-join-url"></code><img id="guest-qr" alt="QR code for the guest registration page" /></div>
           </section>
         </div>
       </section>

@@ -17,17 +17,20 @@ export interface PortalAccount {
 interface PersistedSettings {
   version: 1;
   publicBaseUrl?: string;
+  guestRegistrationEnabled?: boolean;
   portalAccount?: PortalAccount;
 }
 
 export interface PublicSettings {
   publicBaseUrl?: string;
+  guestRegistrationEnabled: boolean;
 }
 
 function cloneSettings(settings: PersistedSettings): PersistedSettings {
   return {
     version: 1,
     ...(settings.publicBaseUrl ? { publicBaseUrl: settings.publicBaseUrl } : {}),
+    ...(settings.guestRegistrationEnabled ? { guestRegistrationEnabled: true } : {}),
     ...(settings.portalAccount ? { portalAccount: { ...settings.portalAccount } } : {}),
   };
 }
@@ -41,6 +44,7 @@ function hasSettingsShape(value: unknown): value is PersistedSettings {
   return (
     settings.version === 1 &&
     (settings.publicBaseUrl === undefined || typeof settings.publicBaseUrl === 'string') &&
+    (settings.guestRegistrationEnabled === undefined || typeof settings.guestRegistrationEnabled === 'boolean') &&
     (account === undefined ||
       (typeof account.username === 'string' &&
         typeof account.passwordSalt === 'string' &&
@@ -87,7 +91,10 @@ export class SettingsStore {
   }
 
   getPublicSettings(): PublicSettings {
-    return this.settings.publicBaseUrl ? { publicBaseUrl: this.settings.publicBaseUrl } : {};
+    return {
+      ...(this.settings.publicBaseUrl ? { publicBaseUrl: this.settings.publicBaseUrl } : {}),
+      guestRegistrationEnabled: this.settings.guestRegistrationEnabled === true,
+    };
   }
 
   getUsername(): string | undefined {
@@ -120,10 +127,17 @@ export class SettingsStore {
   }
 
   async setPublicBaseUrl(publicBaseUrl: string | undefined): Promise<PublicSettings> {
+    return this.updatePublicSettings({ publicBaseUrl });
+  }
+
+  async updatePublicSettings(input: { publicBaseUrl?: string | undefined; guestRegistrationEnabled?: boolean }): Promise<PublicSettings> {
     const previous = cloneSettings(this.settings);
     this.settings = {
       ...this.settings,
-      ...(publicBaseUrl ? { publicBaseUrl } : { publicBaseUrl: undefined }),
+      ...(Object.hasOwn(input, 'publicBaseUrl')
+        ? (input.publicBaseUrl ? { publicBaseUrl: input.publicBaseUrl } : { publicBaseUrl: undefined })
+        : {}),
+      ...(input.guestRegistrationEnabled === undefined ? {} : { guestRegistrationEnabled: input.guestRegistrationEnabled }),
     };
     try {
       await this.persist();

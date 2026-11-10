@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#101a23" />
+    <meta name="color-scheme" content="dark" />
+    <title>Join WebGlow</title>
+    <link rel="stylesheet" href="/portal.css" />
+  </head>
+  <body class="join-body">
+    <main class="join-shell">
+      <section class="join-card" aria-labelledby="join-title">
+        <span class="console-mark">W</span>
+        <p class="eyebrow">WebGlow audience light</p>
+        <h1 id="join-title">Join the room</h1>
+        <p id="join-copy">Choose a name to register this phone as its own light. Keep this page open when the service begins.</p>
+        <form id="join-form">
+          <label>Your name <input id="guest-name" maxlength="80" autocomplete="name" placeholder="Alex" required /></label>
+          <button class="console-button go-button" type="submit">Register this light</button>
+          <p id="join-message" class="form-message" role="alert"></p>
+        </form>
+        <p class="join-note">The host controls the colour and effects. No account, app install, or API token is needed.</p>
+      </section>
+    </main>
+    <script src="/join.js" defer></script>
+  </body>
+</html>

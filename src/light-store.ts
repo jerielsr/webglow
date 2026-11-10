@@ -9,6 +9,7 @@ import {
   isPattern,
   type CreateLightInput,
   type FixtureKind,
+  type GuestFixtureConfig,
   type LightPatch,
   type LightResource,
   type LightState,
@@ -45,6 +46,12 @@ function hasWledShape(value: unknown): value is WledFixtureConfig {
   );
 }
 
+function hasGuestShape(value: unknown): value is GuestFixtureConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  const guest = value as Partial<GuestFixtureConfig>;
+  return typeof guest.registeredAt === 'string' && typeof guest.displayName === 'string';
+}
+
 function hasPersistedLightShape(value: unknown): value is LightResource {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -56,6 +63,7 @@ function hasPersistedLightShape(value: unknown): value is LightResource {
     typeof light.id === 'string' &&
     typeof light.name === 'string' &&
     (light.kind === undefined || light.kind === 'display' || (light.kind === 'wled' && hasWledShape(light.wled))) &&
+    (light.guest === undefined || (light.kind !== 'wled' && hasGuestShape(light.guest))) &&
     typeof light.revision === 'number' &&
     typeof light.updatedAt === 'string' &&
     typeof state?.on === 'boolean' &&
@@ -136,6 +144,7 @@ export class LightStore {
       name: input.name ?? id,
       kind,
       ...(kind === 'wled' && input.wled ? { wled: input.wled } : {}),
+      ...(kind === 'display' && input.guest ? { guest: input.guest } : {}),
       state: {
         ...DEFAULT_LIGHT_STATE,
         patternStartedAt: now.getTime(),

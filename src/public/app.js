@@ -12,6 +12,7 @@
     deferredInstall: null,
     metricsTimer: null,
     metrics: null,
+    guests: null,
     masterLayout: "standard",
     activeCueId: null,
     tapTimes: [],
@@ -74,6 +75,10 @@
   function displayUrl(id) {
     const base = state.settings.publicBaseUrl || window.location.origin;
     return new URL("display/" + encodeURIComponent(id), base.replace(/\/$/, "") + "/").toString();
+  }
+  function guestJoinUrl() {
+    const base = state.settings.publicBaseUrl || window.location.origin;
+    return new URL("join", base.replace(/\/$/, "") + "/").toString();
   }
   async function copyText(value) {
     try {
@@ -324,6 +329,22 @@
     add("Memory", formatBytes(metrics.process.rssBytes));
     add("Sockets", String(metrics.traffic.activeDisplaySockets));
   }
+  function renderGuestMonitor(guests) {
+    const summary = guests || { active: 0, registered: 0, activeSockets: 0, resources: { outboundWebsocketBytes: 0, persistedStateBytes: 0 } };
+    $("#guest-active-count").textContent = summary.active + " active";
+    $("#guest-registered-count").textContent = String(summary.registered);
+    $("#guest-sockets").textContent = String(summary.activeSockets || 0);
+    $("#guest-traffic").textContent = formatBytes(summary.resources?.outboundWebsocketBytes || 0);
+    $("#guest-state-bytes").textContent = formatBytes(summary.resources?.persistedStateBytes || 0);
+  }
+  function renderGuestSharing() {
+    const enabled = state.settings.guestRegistrationEnabled === true;
+    $("#guest-registration-enabled").checked = enabled;
+    $("#guest-share").hidden = !enabled;
+    if (!enabled) return;
+    $("#guest-join-url").textContent = guestJoinUrl();
+    $("#guest-qr").src = "/api/v1/guest-registration/qr?cache=" + Date.now();
+  }
   function formatBytes(bytes) {
     const units = ["B", "KB", "MB", "GB"];
     let value = Number(bytes) || 0;
@@ -352,6 +373,12 @@
     state.settings = await api("/settings");
     $("#public-base-url").value = state.settings.publicBaseUrl || "";
     renderServerDetails(state.metrics);
+    renderGuestSharing();
+  }
+  async function loadGuests() {
+    const guests = await api("/guests");
+    state.guests = guests;
+    renderGuestMonitor(guests);
   }
   async function loadMetrics() {
     try {
@@ -520,10 +547,13 @@
       state.status = await api("/auth/status");
       if (!state.status.authenticated) { showAuth(); return; }
       $("#auth-dialog").hidden = true;
-      await Promise.all([loadLights(), loadScenes(), loadSettings(), loadMetrics()]);
+      await Promise.all([loadLights(), loadScenes(), loadSettings(), loadMetrics(), loadGuests()]);
       switchView(window.location.pathname, true);
       if (state.metricsTimer) window.clearInterval(state.metricsTimer);
-      state.metricsTimer = window.setInterval(loadMetrics, 15000);
+      state.metricsTimer = window.setInterval(() => {
+        void loadMetrics();
+        void loadGuests().catch(handleError);
+      }, 15000);
     } catch (error) { handleError(error); }
   }
   function registerPwa() {
@@ -644,11 +674,33 @@
       state.settings = { ...state.settings, ...result };
       $("#public-base-url").value = result.publicBaseUrl || "";
       renderSetupLights();
+      renderGuestSharing();
       notify("Display address saved.", "success");
     } catch (error) { handleError(error); }
   });
   $("#use-current-url").addEventListener("click", () => { $("#public-base-url").value = window.location.origin; });
   $("#refresh-metrics").addEventListener("click", loadMetrics);
+  $("#guest-registration-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/settings", {
+        method: "PATCH",
+        body: { guestRegistrationEnabled: $("#guest-registration-enabled").checked },
+      });
+      state.settings = { ...state.settings, ...result };
+      renderGuestSharing();
+      await loadGuests();
+      notify(state.settings.guestRegistrationEnabled ? "Guest registration is open." : "Guest registration is closed.", "success");
+    } catch (error) { handleError(error); }
+  });
+  $("#copy-guest-url").addEventListener("click", async () => {
+    if (!state.settings.guestRegistrationEnabled) {
+      notify("Enable guest registration before sharing the join link.", "error");
+      return;
+    }
+    await copyText(guestJoinUrl());
+    notify("Guest join URL copied.", "success");
+  });
   $("#password-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

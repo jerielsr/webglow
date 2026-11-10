@@ -147,6 +147,12 @@ curl --request POST http://localhost:1828/api/v1/lights \
 
 WebGlow uses WLED's documented JSON API at /json and /json/state; the WLED device must be reachable from the WebGlow container. A WLED fixture is a physical output, so it does not have a display URL. Use **Refresh WLED** in Setup to pull its current state back into the console. Each programmer, chase, batch, and cue action uses one shared effect clock; browser displays receive the same start time and WLED fixtures receive the same WLED effect timebase, so effects remain phase-aligned.
 
+### Audience guest lights
+
+For an audience, open **Settings** → **Audience registration** and enable guest access. WebGlow reveals a shareable join URL and an in-portal QR code. A guest opens the link, enters a display name, and is redirected to a unique full-screen light page. Their fixture appears immediately in the normal console fixture sheet, so it can be selected, programmed, included in cues, or controlled with every light at once.
+
+Guest registration is closed by default and is rate-limited to 12 registrations per source network every 10 minutes. Close it once everyone has joined. The **Masters** panel shows registered and active guest counts, active guest WebSocket connections, WebSocket data sent to guest displays, and the persisted state footprint for guest fixtures. This makes it practical to watch audience participation without exposing the portal login or API bearer token.
+
 ## Control it
 
 Turn the display on with a solid cyan output:
@@ -217,6 +223,10 @@ All successful light resources have this shape:
 | `DELETE` | `/api/v1/scenes/:sceneId` | Delete a recorded cue. |
 | `GET` | `/api/v1/metrics` | Process, host, and WebGlow traffic snapshot. |
 | `GET` / `PATCH` | `/api/v1/settings` | Read or set the public application URL used in display links. |
+| `GET` | `/api/v1/guest-registration` | Public registration availability check. |
+| `POST` | `/api/v1/guest-registration` | Publicly register one unique browser light when guest access is enabled. |
+| `GET` | `/api/v1/guest-registration/qr` | Authenticated SVG QR code for the join URL. |
+| `GET` | `/api/v1/guests` | Authenticated guest counts, activity, and guest-specific resource usage. |
 | `DELETE` | `/api/v1/lights/:id` | Remove a light and turn connected displays black. |
 | `GET` | `/display/:id` | Full-screen browser renderer for that light. |
 | `GET` | `/api/v1/ws?role=display&lightId=:id` | Display-only live state stream. |
