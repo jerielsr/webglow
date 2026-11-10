@@ -141,6 +141,10 @@ test('serves the portal and requires lights to be created before they can be fet
     assert.equal(setup.statusCode, 200);
     assert.match(setup.body, /WebGlow Console/);
 
+    const monitor = await app.inject({ method: 'GET', url: '/monitor' });
+    assert.equal(monitor.statusCode, 200);
+    assert.match(monitor.body, /Live service health/);
+
     const settings = await app.inject({ method: 'GET', url: '/settings' });
     assert.equal(settings.statusCode, 200);
     assert.match(settings.body, /System settings/);

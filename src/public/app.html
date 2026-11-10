@@ -19,10 +19,12 @@
       <nav class="console-nav" aria-label="Portal navigation">
         <a href="/" data-route data-view-link="console">Control</a>
         <a href="/setup" data-route data-view-link="setup">Setup</a>
+        <a href="/monitor" data-route data-view-link="monitor">Monitor</a>
         <a href="/settings" data-route data-view-link="settings">Settings</a>
       </nav>
       <div class="console-header-right">
         <span id="portal-status" class="console-status" role="status">Connecting…</span>
+        <label class="header-grand-master">Grand <output id="header-grand-master-output">100%</output><input id="header-grand-master" type="range" min="0" max="100" value="100" aria-label="Grand master output" /></label>
         <button id="blackout" class="blackout-button" type="button">Blackout</button>
       </div>
     </header>
@@ -80,7 +82,7 @@
               </label>
             </div>
             <div class="programmer-actions">
-              <button id="apply-live" class="console-button go-button" type="button">Apply live</button>
+              <span id="live-programmer-status" class="live-programmer-status">Live — changes send immediately</span>
               <button id="flash-fixtures" class="console-button flash-button" type="button">Flash</button>
               <button id="make-chase" class="console-button subtle-button" type="button">Make chase</button>
             </div>
@@ -102,9 +104,7 @@
               <label class="touch-fader"><span>Rate</span><output id="rate-master-output">100%</output><input id="rate-master" type="range" min="10" max="200" value="100" aria-label="Rate master" /><small>Speed</small></label>
               <label class="touch-fader"><span>Fade</span><output id="fade-master-output">100%</output><input id="fade-master" type="range" min="0" max="200" value="100" aria-label="Fade master" /><small>Time</small></label>
             </div>
-            <div class="master-actions"><button id="restore-output" class="console-button subtle-button" type="button">Restore output</button><button id="master-blackout" class="console-button danger-button" type="button">Blackout</button></div>
-            <div id="metrics-list" class="console-metrics" aria-live="polite"></div>
-            <div class="guest-monitor"><div><span>Guest lights</span><b id="guest-active-count">0 active</b></div><div><span>Registered</span><b id="guest-registered-count">0</b></div><div><span>Guest sockets</span><b id="guest-sockets">0</b></div><div><span>Guest traffic</span><b id="guest-traffic">0 B</b></div><div><span>Guest state</span><b id="guest-state-bytes">0 B</b></div></div>
+            <div class="master-actions"><button id="restore-output" class="console-button subtle-button" type="button">Restore output</button><button id="master-blackout" class="console-button danger-button" type="button" aria-pressed="false">Blackout</button></div>
           </aside>
         </div>
 
@@ -124,6 +124,18 @@
           <div id="cue-list" class="cue-list"></div>
           <p id="cue-empty" class="console-empty">Record the current programmer values as Cue 1.</p>
         </section>
+      </section>
+
+      <section id="view-monitor" class="app-view" hidden>
+        <div class="view-heading"><div><p>System monitor</p><h1>Live service health</h1><span>Operational detail for diagnosing performance, connectivity, traffic, and audience participation.</span></div><button id="refresh-monitor" class="console-button subtle-button" type="button">Refresh now</button></div>
+        <div class="monitor-summary" aria-live="polite"><article><span>Process CPU</span><b id="monitor-cpu">—</b></article><article><span>Process memory</span><b id="monitor-memory">—</b></article><article><span>Open displays</span><b id="monitor-sockets">—</b></article><article><span>Registered guests</span><b id="monitor-guests-count">—</b></article></div>
+        <div class="monitor-grid">
+          <section class="console-panel"><div class="console-panel-heading"><div><p>WebGlow process</p><h1>Runtime</h1></div></div><dl id="monitor-process" class="console-details"></dl></section>
+          <section class="console-panel"><div class="console-panel-heading"><div><p>HTTP and WebSocket</p><h1>Traffic</h1></div></div><dl id="monitor-traffic" class="console-details"></dl></section>
+          <section class="console-panel"><div class="console-panel-heading"><div><p>Docker host</p><h1>Host capacity</h1></div></div><dl id="monitor-host" class="console-details"></dl></section>
+          <section class="console-panel"><div class="console-panel-heading"><div><p>Audience devices</p><h1>Guest activity</h1></div></div><dl id="monitor-guests" class="console-details"></dl><div id="monitor-guest-list" class="monitor-guest-list"></div></section>
+        </div>
+        <p id="monitor-updated" class="monitor-updated"></p>
       </section>
 
       <section id="view-setup" class="app-view" hidden>
@@ -164,7 +176,7 @@
             </form>
           </section>
           <section class="console-panel">
-            <div class="console-panel-heading"><div><p>Server &amp; container</p><h1>Runtime</h1></div><button id="refresh-metrics" class="console-button subtle-button" type="button">Refresh</button></div>
+            <div class="console-panel-heading"><div><p>Server &amp; container</p><h1>Configuration</h1></div></div>
             <dl id="server-details" class="console-details"></dl>
           </section>
           <section class="console-panel">

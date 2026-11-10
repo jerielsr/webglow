@@ -2,7 +2,7 @@
   "use strict";
 
   const API = "/api/v1";
-  const VIEWS = { "/": "console", "/setup": "setup", "/settings": "settings" };
+  const VIEWS = { "/": "console", "/setup": "setup", "/monitor": "monitor", "/settings": "settings" };
   const state = {
     lights: [],
     scenes: [],
@@ -14,6 +14,11 @@
     metrics: null,
     guests: null,
     masterLayout: "standard",
+    blackoutActive: false,
+    blackoutRestoreIds: [],
+    liveApplyTimer: null,
+    liveApplyInFlight: false,
+    liveApplyQueued: false,
     activeCueId: null,
     tapTimes: [],
     programmer: { on: true, brightness: 80, color: "#2EA8FF", pattern: "solid", speed: 50, fadeMs: 1000 },
@@ -137,6 +142,8 @@
     updateFaderOutput($("#grand-master"), $("#grand-master-output"), "%");
     updateFaderOutput($("#rate-master"), $("#rate-master-output"), "%");
     updateFaderOutput($("#fade-master"), $("#fade-master-output"), "%");
+    $("#header-grand-master").value = $("#grand-master").value;
+    updateFaderOutput($("#header-grand-master"), $("#header-grand-master-output"), "%");
     updateCommandLine();
   }
   function setMasterValues(values) {
@@ -159,6 +166,7 @@
     const bpm = Math.round(60_000 / average);
     const rate = Math.max(10, Math.min(200, Math.round((bpm / 120) * 100)));
     setMasterValues({ "rate-master": rate });
+    scheduleProgrammerApply();
     notify("Tap tempo " + bpm + " BPM · rate " + rate + "%", "success");
   }
   function updateCommandLine() {
@@ -310,32 +318,6 @@
       add("CORS policy", state.settings.server.corsOrigin);
       add("Persistent storage", state.settings.server.persistence);
     }
-    if (metrics) {
-      add("Runtime", metrics.host.platform + " · " + metrics.host.architecture);
-      add("Container process", formatBytes(metrics.process.rssBytes) + " memory · " + metrics.process.cpuPercent.toFixed(1) + "% CPU");
-      add("Display sockets", String(metrics.traffic.activeDisplaySockets));
-    }
-  }
-  function renderConsoleMetrics(metrics) {
-    const root = $("#metrics-list");
-    root.replaceChildren();
-    if (!metrics) return;
-    const add = (label, value) => {
-      const row = element("div");
-      row.append(element("span", "", label), element("b", "", value));
-      root.append(row);
-    };
-    add("CPU", metrics.process.cpuPercent.toFixed(1) + "%");
-    add("Memory", formatBytes(metrics.process.rssBytes));
-    add("Sockets", String(metrics.traffic.activeDisplaySockets));
-  }
-  function renderGuestMonitor(guests) {
-    const summary = guests || { active: 0, registered: 0, activeSockets: 0, resources: { outboundWebsocketBytes: 0, persistedStateBytes: 0 } };
-    $("#guest-active-count").textContent = summary.active + " active";
-    $("#guest-registered-count").textContent = String(summary.registered);
-    $("#guest-sockets").textContent = String(summary.activeSockets || 0);
-    $("#guest-traffic").textContent = formatBytes(summary.resources?.outboundWebsocketBytes || 0);
-    $("#guest-state-bytes").textContent = formatBytes(summary.resources?.persistedStateBytes || 0);
   }
   function renderGuestSharing() {
     const enabled = state.settings.guestRegistrationEnabled === true;
@@ -351,6 +333,70 @@
     let unit = 0;
     while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
     return (value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)) + " " + units[unit];
+  }
+  function formatDuration(seconds) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    return hours ? hours + "h " + minutes + "m" : minutes + "m " + (total % 60) + "s";
+  }
+  function renderDetailList(selector, entries) {
+    const root = $(selector);
+    root.replaceChildren();
+    entries.forEach(([key, value]) => {
+      const row = element("div");
+      row.append(element("dt", "", key), element("dd", "", value));
+      root.append(row);
+    });
+  }
+  function renderMonitoring() {
+    const metrics = state.metrics;
+    const guests = state.guests;
+    if (!metrics) return;
+    const traffic = metrics.traffic || {};
+    const process = metrics.process || {};
+    const host = metrics.host || {};
+    $("#monitor-cpu").textContent = Number(process.cpuPercent || 0).toFixed(1) + "%";
+    $("#monitor-memory").textContent = formatBytes(process.rssBytes);
+    $("#monitor-sockets").textContent = String(traffic.activeDisplaySockets || 0);
+    $("#monitor-guests-count").textContent = String(guests?.registered || 0);
+    renderDetailList("#monitor-process", [
+      ["Uptime", formatDuration(metrics.uptimeSeconds)],
+      ["CPU", Number(process.cpuPercent || 0).toFixed(1) + "%"],
+      ["RSS memory", formatBytes(process.rssBytes)],
+      ["Heap used", formatBytes(process.heapUsedBytes) + " of " + formatBytes(process.heapTotalBytes)],
+      ["Started", metrics.startedAt ? new Date(metrics.startedAt).toLocaleString() : "—"],
+    ]);
+    renderDetailList("#monitor-traffic", [
+      ["Requests", String(traffic.requests || 0)],
+      ["Received", formatBytes(traffic.receivedBytes)],
+      ["Sent", formatBytes(traffic.sentBytes)],
+      ["Display sockets", String(traffic.activeDisplaySockets || 0)],
+      ["Scope", traffic.note || "WebGlow service traffic"],
+    ]);
+    renderDetailList("#monitor-host", [
+      ["Runtime", (host.platform || "—") + " · " + (host.architecture || "—")],
+      ["CPUs", String(host.cpus || "—")],
+      ["Free memory", formatBytes(host.freeMemoryBytes) + " of " + formatBytes(host.totalMemoryBytes)],
+      ["Load average", Array.isArray(host.loadAverage) ? host.loadAverage.map((value) => Number(value).toFixed(2)).join(" · ") : "—"],
+    ]);
+    renderDetailList("#monitor-guests", [
+      ["Registration", guests?.registrationEnabled ? "Open" : "Closed"],
+      ["Registered", String(guests?.registered || 0)],
+      ["Active lights", String(guests?.active || 0)],
+      ["Guest sockets", String(guests?.activeSockets || 0)],
+      ["Guest state", formatBytes(guests?.resources?.persistedStateBytes)],
+      ["Guest traffic", formatBytes(guests?.resources?.outboundWebsocketBytes)],
+    ]);
+    const guestList = $("#monitor-guest-list");
+    guestList.replaceChildren();
+    (guests?.guests || []).slice(0, 24).forEach((guest) => {
+      const row = element("div", "monitor-guest" + (guest.connected ? " connected" : ""));
+      row.append(element("b", "", guest.name), element("span", "", guest.connected ? "Connected" : "Offline"));
+      guestList.append(row);
+    });
+    if (!(guests?.guests || []).length) guestList.append(element("p", "console-empty", "No guest lights have registered."));
+    $("#monitor-updated").textContent = "Last refreshed " + new Date().toLocaleTimeString() + ". Values update every 15 seconds while the portal is open.";
   }
   async function loadLights() {
     const result = await api("/lights");
@@ -378,28 +424,49 @@
   async function loadGuests() {
     const guests = await api("/guests");
     state.guests = guests;
-    renderGuestMonitor(guests);
+    renderMonitoring();
   }
   async function loadMetrics() {
     try {
       const metrics = await api("/metrics");
       state.metrics = metrics;
-      renderConsoleMetrics(metrics);
       renderServerDetails(metrics);
+      renderMonitoring();
     } catch (error) {
       handleError(error);
     }
   }
-  async function applyProgrammer() {
+  function scheduleProgrammerApply() {
+    if (state.liveApplyTimer) window.clearTimeout(state.liveApplyTimer);
+    $("#live-programmer-status").textContent = "Sending live output…";
+    state.liveApplyTimer = window.setTimeout(() => {
+      state.liveApplyTimer = null;
+      void applyProgrammer(true);
+    }, 65);
+  }
+  async function applyProgrammer(live = false) {
     syncProgrammerFromInputs();
+    if (state.liveApplyInFlight) {
+      state.liveApplyQueued = true;
+      return;
+    }
+    state.liveApplyInFlight = true;
     try {
       const result = await api("/lights/batch", { method: "POST", body: { ids: targetIds(), state: effectiveProgrammer() } });
       state.lights = result.lights || state.lights;
       renderFixtureGrid();
       renderSetupLights();
-      setStatus("Live programmer applied to " + result.count + " fixture" + (result.count === 1 ? "" : "s"), "success");
-      notify("Live output applied.", "success");
-    } catch (error) { handleError(error); }
+      const message = "Live on " + result.count + " fixture" + (result.count === 1 ? "" : "s");
+      $("#live-programmer-status").textContent = message;
+      if (!live) { setStatus("Live programmer applied to " + result.count + " fixture" + (result.count === 1 ? "" : "s"), "success"); notify("Live output applied.", "success"); }
+    } catch (error) { $("#live-programmer-status").textContent = "Live output unavailable"; handleError(error); }
+    finally {
+      state.liveApplyInFlight = false;
+      if (state.liveApplyQueued) {
+        state.liveApplyQueued = false;
+        scheduleProgrammerApply();
+      }
+    }
   }
   async function makeChase() {
     syncProgrammerFromInputs();
@@ -425,14 +492,35 @@
       }, 350);
     } catch (error) { handleError(error); }
   }
+  function renderBlackoutState() {
+    ["#blackout", "#master-blackout"].forEach((selector) => {
+      const control = $(selector);
+      control.textContent = state.blackoutActive ? "Restore output" : "Blackout";
+      control.setAttribute("aria-pressed", String(state.blackoutActive));
+      control.classList.toggle("active", state.blackoutActive);
+    });
+  }
   async function blackout() {
     try {
+      if (state.blackoutActive) {
+        if (state.blackoutRestoreIds.length) await api("/lights/batch", { method: "POST", body: { ids: state.blackoutRestoreIds, state: { on: true, fadeMs: effectiveProgrammer().fadeMs } } });
+        state.blackoutActive = false;
+        state.blackoutRestoreIds = [];
+        renderBlackoutState();
+        await loadLights();
+        notify("Blackout released; previous live fixtures restored.", "success");
+        return;
+      }
+      state.blackoutRestoreIds = state.lights.filter((light) => light.state.on).map((light) => light.id);
       await api("/lights/batch", { method: "POST", body: { ids: "all", state: { on: false, fadeMs: 0 } } });
+      state.blackoutActive = true;
+      renderBlackoutState();
       await loadLights();
       notify("Blackout active.", "success");
     } catch (error) { handleError(error); }
   }
   async function restoreOutput() {
+    if (state.blackoutActive) return blackout();
     try {
       await api("/lights/batch", { method: "POST", body: { ids: "all", state: { on: true, fadeMs: effectiveProgrammer().fadeMs } } });
       await loadLights();
@@ -581,18 +669,24 @@
   window.addEventListener("popstate", () => switchView(window.location.pathname, true));
   $("#program-brightness").addEventListener("input", (event) => {
     updateFaderOutput(event.currentTarget, $("#program-brightness-output"), "%");
-    syncProgrammerFromInputs(); updateCommandLine();
+    syncProgrammerFromInputs(); updateCommandLine(); scheduleProgrammerApply();
   });
   $("#program-speed").addEventListener("input", (event) => {
     updateFaderOutput(event.currentTarget, $("#program-speed-output"), "%");
-    syncProgrammerFromInputs(); updateCommandLine();
+    syncProgrammerFromInputs(); updateCommandLine(); scheduleProgrammerApply();
   });
   ["#grand-master", "#rate-master", "#fade-master"].forEach((selector) => {
-    $(selector).addEventListener("input", syncMasters);
+    $(selector).addEventListener("input", () => { syncMasters(); scheduleProgrammerApply(); });
+  });
+  $("#header-grand-master").addEventListener("input", (event) => {
+    $("#grand-master").value = event.currentTarget.value;
+    syncMasters();
+    scheduleProgrammerApply();
   });
   $("#master-layout").addEventListener("change", (event) => setMasterLayout(event.currentTarget.value));
   $("#reset-masters").addEventListener("click", () => {
     setMasterValues({ "grand-master": 100, "rate-master": 100, "fade-master": 100 });
+    scheduleProgrammerApply();
     notify("Masters reset to full output.", "success");
   });
   document.querySelectorAll("[data-master-preset]").forEach((preset) => preset.addEventListener("click", () => {
@@ -602,17 +696,17 @@
       snap: { "grand-master": 100, "rate-master": 100, "fade-master": 0 },
     };
     setMasterValues(values[preset.dataset.masterPreset] || values.full);
+    scheduleProgrammerApply();
     notify(preset.textContent + " master preset selected.", "success");
   }));
   $("#tap-tempo").addEventListener("click", tapTempo);
   ["#program-colour", "#program-pattern", "#program-fade"].forEach((selector) => {
-    $(selector).addEventListener("change", () => { syncProgrammerFromInputs(); updateCommandLine(); });
+    $(selector).addEventListener(selector === "#program-colour" ? "input" : "change", () => { syncProgrammerFromInputs(); updateCommandLine(); scheduleProgrammerApply(); });
   });
   document.querySelectorAll("[data-attribute]").forEach((tab) => tab.addEventListener("click", () => {
     document.querySelectorAll("[data-attribute]").forEach((candidate) => candidate.classList.toggle("active", candidate === tab));
     document.body.dataset.attribute = tab.dataset.attribute;
   }));
-  $("#apply-live").addEventListener("click", applyProgrammer);
   $("#make-chase").addEventListener("click", makeChase);
   $("#flash-fixtures").addEventListener("click", flashFixtures);
   $("#blackout").addEventListener("click", blackout);
@@ -679,7 +773,7 @@
     } catch (error) { handleError(error); }
   });
   $("#use-current-url").addEventListener("click", () => { $("#public-base-url").value = window.location.origin; });
-  $("#refresh-metrics").addEventListener("click", loadMetrics);
+  $("#refresh-monitor").addEventListener("click", () => { void Promise.all([loadMetrics(), loadGuests()]).catch(handleError); });
   $("#guest-registration-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

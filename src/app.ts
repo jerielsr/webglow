@@ -340,6 +340,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.get('/', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/setup', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
+  app.get('/monitor', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/settings', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('app.html'));
   app.get('/join', async (_request, reply) => reply.type('text/html; charset=utf-8').sendFile('join.html'));
   app.get('/healthz', async () => ({ status: 'ok' }));

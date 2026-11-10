@@ -96,7 +96,7 @@ docker compose --env-file .env -f compose.portainer.yaml up --detach
 
 For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
 
-Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. **Control** is the console programmer and cue stack; **Setup** creates and manages fixtures; **Settings** contains server, container, account, and public-URL settings. The portal uses client-side navigation and includes a PWA manifest/service worker, so moving between these views does not reload the application.
+Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. **Control** is the live console programmer and cue stack; **Setup** creates and manages fixtures; **Monitor** provides process, host, traffic, display-socket, and guest activity diagnostics; **Settings** contains server, container, account, and public-URL settings. Programmer and master changes are sent live after a short input debounce, so an Apply action is not required. The portal uses client-side navigation and includes a PWA manifest/service worker, so moving between these views does not reload the application.
 
 ```sh
 curl --request POST http://localhost:1828/api/v1/lights \
