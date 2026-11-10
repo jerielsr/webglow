@@ -145,7 +145,7 @@ curl --request POST http://localhost:1828/api/v1/lights \
   --data '{"id":"garden-pixels","name":"Garden pixels","kind":"wled","wled":{"url":"http://wled.local","segment":0}}'
 ~~~
 
-WebGlow uses WLED's documented JSON API at /json and /json/state; the WLED device must be reachable from the WebGlow container. A WLED fixture is a physical output, so it does not have a display URL. Use **Refresh WLED** in Setup to pull its current state back into the console.
+WebGlow uses WLED's documented JSON API at /json and /json/state; the WLED device must be reachable from the WebGlow container. A WLED fixture is a physical output, so it does not have a display URL. Use **Refresh WLED** in Setup to pull its current state back into the console. Each programmer, chase, batch, and cue action uses one shared effect clock; browser displays receive the same start time and WLED fixtures receive the same WLED effect timebase, so effects remain phase-aligned.
 
 ## Control it
 

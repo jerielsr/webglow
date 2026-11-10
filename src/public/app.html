@@ -94,6 +94,7 @@
                 <button class="master-preset" type="button" data-master-preset="full">Full</button>
                 <button class="master-preset" type="button" data-master-preset="half">Half</button>
                 <button class="master-preset" type="button" data-master-preset="snap">Snap</button>
+                <button id="tap-tempo" class="master-preset" type="button">Tap</button>
               </div>
             </div>
             <div id="master-deck" class="master-deck" data-layout="standard">
@@ -109,10 +110,13 @@
         <section class="console-panel cue-stack" aria-labelledby="cue-stack-title">
           <div class="console-panel-heading">
             <div><p>Cue stack</p><h1 id="cue-stack-title">Main playback</h1></div>
-            <div class="cue-record">
-              <label>Cue <input id="cue-number" inputmode="decimal" value="1" aria-label="Cue number" /></label>
-              <label>Name <input id="cue-name" placeholder="Warm welcome" aria-label="Cue name" /></label>
-              <button id="record-cue" class="console-button record-button" type="button">Record</button>
+            <div class="cue-console-controls">
+              <div class="cue-live-controls"><span id="active-cue" class="active-cue">Standby</span><button id="cue-back" class="console-button subtle-button" type="button">Back</button><button id="cue-go-next" class="console-button go-button" type="button">GO</button></div>
+              <div class="cue-record">
+                <label>Cue <input id="cue-number" inputmode="decimal" value="1" aria-label="Cue number" /></label>
+                <label>Name <input id="cue-name" placeholder="Warm welcome" aria-label="Cue name" /></label>
+                <button id="record-cue" class="console-button record-button" type="button">Record</button>
+              </div>
             </div>
           </div>
           <div class="cue-table-head" aria-hidden="true"><span>Cue</span><span>Name</span><span>Fixtures</span><span>Fade</span><span>Playback</span></div>

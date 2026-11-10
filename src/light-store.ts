@@ -163,7 +163,7 @@ export class LightStore {
   }
 
   /** Apply state changes as one persisted update, then notify all affected displays. */
-  async updateMany(updates: Array<{ id: string; patch: LightPatch }>): Promise<LightResource[]> {
+  async updateMany(updates: Array<{ id: string; patch: LightPatch }>, timestamp = Date.now()): Promise<LightResource[]> {
     const uniqueIds = new Set(updates.map((update) => update.id));
     if (uniqueIds.size !== updates.length) {
       throw new Error('updateMany does not accept duplicate light IDs.');
@@ -174,7 +174,6 @@ export class LightStore {
       return [];
     }
 
-    const timestamp = Date.now();
     const changed: Array<{ previous: LightResource; next: LightResource }> = [];
     for (let index = 0; index < updates.length; index += 1) {
       const current = currents[index] as LightResource;

@@ -112,16 +112,20 @@ export class WledClient {
     };
   }
 
-  async apply(light: LightResource): Promise<void> {
+  async apply(light: LightResource, synchronizedAt: number): Promise<void> {
     if (light.kind !== 'wled' || !light.wled) return;
     const effect = light.wled.effectMap?.[light.state.pattern];
     const payload: Record<string, unknown> = {
       on: light.state.on,
       tt: Math.min(65535, Math.round(light.state.fadeMs / 100)),
+      // WLED uses this uint32 timebase to calculate the phase of an effect.
+      // Every fixture receives the identical value, keeping compatible
+      // WLED effects aligned even when HTTP requests arrive a few ms apart.
+      tb: synchronizedAt >>> 0,
       seg: [
         {
           id: light.wled.segment,
-          bri: Math.max(1, Math.round((light.state.brightness / 100) * 255)),
+          ...(light.state.on ? { bri: Math.max(1, Math.round((light.state.brightness / 100) * 255)) } : {}),
           col: [rgbFromHex(light.state.color)],
           sx: Math.round((light.state.speed / 100) * 255),
           ...(effect === undefined ? {} : { fx: effect }),

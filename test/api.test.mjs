@@ -355,6 +355,24 @@ test('adds and drives a WLED fixture through its JSON API', async () => {
     assert.deepEqual(command.seg[0].col, [[255, 0, 170]]);
     assert.equal(command.seg[0].fx, 1);
     assert.equal(command.seg[0].sx, 102);
+    assert.equal(command.tb, updated.json().state.patternStartedAt >>> 0);
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights',
+      payload: { id: 'stage-wled', kind: 'wled', wled: { url: 'http://second-wled.test', segment: 0 } },
+    });
+    assert.equal(second.statusCode, 201);
+    const batch = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights/batch',
+      payload: { ids: ['garden-wled', 'stage-wled'], state: { on: true, pattern: 'chase', speed: 55 } },
+    });
+    assert.equal(batch.statusCode, 200);
+    const synchronizedCommands = calls.filter((call) => call.init?.method === 'POST').slice(-2).map((call) => JSON.parse(call.init.body));
+    assert.equal(synchronizedCommands[0].tb, synchronizedCommands[1].tb);
+    assert.equal(synchronizedCommands[0].tb, batch.json().lights[0].state.patternStartedAt >>> 0);
+    assert.equal(batch.json().lights[0].state.patternStartedAt, batch.json().lights[1].state.patternStartedAt);
 
     const refreshed = await app.inject({ method: 'POST', url: '/api/v1/lights/garden-wled/wled/refresh' });
     assert.equal(refreshed.statusCode, 200);

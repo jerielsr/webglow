@@ -13,6 +13,8 @@
     metricsTimer: null,
     metrics: null,
     masterLayout: "standard",
+    activeCueId: null,
+    tapTimes: [],
     programmer: { on: true, brightness: 80, color: "#2EA8FF", pattern: "solid", speed: 50, fadeMs: 1000 },
   };
   const $ = (selector) => document.querySelector(selector);
@@ -140,6 +142,20 @@
     try { setMasterLayout(window.localStorage.getItem("webglow.master-layout") || "standard"); } catch { setMasterLayout("standard"); }
     syncMasters();
   }
+  function tapTempo() {
+    const now = performance.now();
+    state.tapTimes = [...state.tapTimes.filter((time) => now - time < 2500), now].slice(-4);
+    if (state.tapTimes.length < 2) {
+      notify("Tap again to set tempo.", "success");
+      return;
+    }
+    const intervals = state.tapTimes.slice(1).map((time, index) => time - state.tapTimes[index]);
+    const average = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+    const bpm = Math.round(60_000 / average);
+    const rate = Math.max(10, Math.min(200, Math.round((bpm / 120) * 100)));
+    setMasterValues({ "rate-master": rate });
+    notify("Tap tempo " + bpm + " BPM · rate " + rate + "%", "success");
+  }
   function updateCommandLine() {
     const target = selectedLights();
     const fixtureText = state.selected.size
@@ -251,8 +267,10 @@
     const list = $("#cue-list");
     list.replaceChildren();
     $("#cue-empty").hidden = state.scenes.length > 0;
+    const active = state.scenes.find((scene) => scene.id === state.activeCueId);
+    $("#active-cue").textContent = active ? "Live " + active.id + " · " + active.name : "Standby";
     state.scenes.forEach((scene) => {
-      const row = element("article", "cue-row");
+      const row = element("article", "cue-row" + (scene.id === state.activeCueId ? " active" : ""));
       row.append(
         element("strong", "cue-number", scene.id),
         element("span", "cue-name", scene.name),
@@ -324,6 +342,10 @@
   async function loadScenes() {
     const result = await api("/scenes");
     state.scenes = result.scenes || [];
+    try {
+      const remembered = window.localStorage.getItem("webglow.active-cue");
+      state.activeCueId = state.scenes.some((scene) => scene.id === remembered) ? remembered : null;
+    } catch { state.activeCueId = null; }
     renderCueList();
   }
   async function loadSettings() {
@@ -408,12 +430,25 @@
       notify("Cue " + id + " recorded.", "success");
     } catch (error) { handleError(error); }
   }
+  function runCueStep(direction) {
+    if (!state.scenes.length) {
+      notify("Record a cue before using GO.", "error");
+      return;
+    }
+    const currentIndex = state.scenes.findIndex((scene) => scene.id === state.activeCueId);
+    const fallback = direction > 0 ? 0 : state.scenes.length - 1;
+    const nextIndex = currentIndex < 0 ? fallback : Math.max(0, Math.min(state.scenes.length - 1, currentIndex + direction));
+    void runCue(state.scenes[nextIndex]);
+  }
   async function runCue(scene) {
     try {
       const result = await api("/scenes/" + encodeURIComponent(scene.id) + "/go", { method: "POST" });
       state.lights = result.lights || state.lights;
+      state.activeCueId = scene.id;
+      try { window.localStorage.setItem("webglow.active-cue", scene.id); } catch {}
       renderFixtureGrid();
       renderSetupLights();
+      renderCueList();
       setStatus("Cue " + scene.id + " live", "success");
       notify("Cue " + scene.id + " is live.", "success");
     } catch (error) { handleError(error); }
@@ -423,6 +458,10 @@
     try {
       await api("/scenes/" + encodeURIComponent(id), { method: "DELETE" });
       state.scenes = state.scenes.filter((scene) => scene.id !== id);
+      if (state.activeCueId === id) {
+        state.activeCueId = null;
+        try { window.localStorage.removeItem("webglow.active-cue"); } catch {}
+      }
       renderCueList();
       notify("Cue " + id + " deleted.", "success");
     } catch (error) { handleError(error); }
@@ -535,6 +574,7 @@
     setMasterValues(values[preset.dataset.masterPreset] || values.full);
     notify(preset.textContent + " master preset selected.", "success");
   }));
+  $("#tap-tempo").addEventListener("click", tapTempo);
   ["#program-colour", "#program-pattern", "#program-fade"].forEach((selector) => {
     $(selector).addEventListener("change", () => { syncProgrammerFromInputs(); updateCommandLine(); });
   });
@@ -562,6 +602,8 @@
     notify("All fixtures selected.", "success");
   });
   $("#record-cue").addEventListener("click", recordCue);
+  $("#cue-go-next").addEventListener("click", () => runCueStep(1));
+  $("#cue-back").addEventListener("click", () => runCueStep(-1));
   $("#refresh-lights").addEventListener("click", () => { void loadLights().catch(handleError); });
   function syncFixtureTypeForm() {
     const isWled = $("#new-light-kind").value === "wled";

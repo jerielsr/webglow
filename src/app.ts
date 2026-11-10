@@ -230,11 +230,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       }
     }
 
+    // One clock value is shared by all browser renderers and WLED commands.
+    // Calls are dispatched together; WLED's timebase then removes visible
+    // phase drift caused by small per-device HTTP timing differences.
+    const synchronizedAt = Date.now();
     await Promise.all(
       updates.map(async (update, index) => {
         const light = existing[index];
         if (light.kind === 'wled' && hasOutputPatch(update.patch)) {
-          await wled.apply(previewLight(light, update.patch));
+          await wled.apply(previewLight(light, update.patch), synchronizedAt);
         }
       }),
     );
@@ -246,6 +250,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           ? { ...update.patch, expectedRevision: existing[index].revision }
           : update.patch,
       })),
+      synchronizedAt,
     );
   }
 
@@ -304,6 +309,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       fixtureKinds: ['display', 'wled'],
       brightness: { minimum: 0, maximum: 100, unit: 'rendered-percent' },
       fadeMs: { minimum: 0, maximum: 60_000 },
+      synchronizedEffects: 'shared effect clock and WLED timebase',
       realtime: 'websocket',
       persistence: 'file',
     },
