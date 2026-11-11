@@ -63,6 +63,10 @@
   let devicePixelRatio = 1;
   let connection = { state: "initial", message: "" };
   let transition = null;
+  let mediaElement = null;
+  let mediaUrl = "";
+  let mediaKind = "";
+  let mediaStartedAtMs = 0;
 
   const colorScratch = document.createElement("canvas");
   colorScratch.width = 1;
@@ -145,6 +149,9 @@
         speed: clamp(rawState.speed, 0, 100, defaultState.speed),
         fadeMs: clamp(rawState.fadeMs, 0, 60000, defaultState.fadeMs),
         phaseOffset: clamp(rawState.phaseOffset, 0, 1, defaultState.phaseOffset),
+        mediaUrl: typeof rawState.mediaUrl === "string" ? rawState.mediaUrl : "",
+        mediaKind: rawState.mediaKind === "video" ? "video" : rawState.mediaUrl ? "image" : "",
+        mediaStartedAt: Number(rawState.mediaStartedAt) || 0,
         // Optional: newer servers provide this to keep many displays in phase.
         patternStartedAt: Number.isFinite(patternStartedAt) && patternStartedAt > 0 ? patternStartedAt : 0,
       },
@@ -190,6 +197,7 @@
       light.updatedAt !== nextLight.updatedAt ||
       light.state.speed !== nextLight.state.speed ||
       light.state.patternStartedAt !== nextLight.state.patternStartedAt;
+    const mediaChanged = light.state.mediaUrl !== nextLight.state.mediaUrl || light.state.mediaKind !== nextLight.state.mediaKind || light.state.mediaStartedAt !== nextLight.state.mediaStartedAt;
 
     const visualChanged =
       light.state.on !== nextLight.state.on ||
@@ -210,6 +218,7 @@
     }
 
     light = nextLight;
+    if (mediaChanged) setDisplayMedia(nextLight.state.mediaUrl, nextLight.state.mediaKind, nextLight.state.mediaStartedAt);
     lastRevision = nextLight.revision;
     lastUpdatedAtMs = nextLight.updatedAtMs || lastUpdatedAtMs;
 
@@ -218,6 +227,60 @@
     }
 
     updateDetails();
+  }
+
+  function setDisplayMedia(url, kind, startedAt) {
+    if (mediaElement && mediaUrl === url && mediaKind === kind && mediaStartedAtMs === Number(startedAt)) return;
+    if (mediaElement instanceof HTMLVideoElement) {
+      mediaElement.pause();
+      mediaElement.removeAttribute("src");
+      mediaElement.load();
+    }
+    mediaElement = null;
+    mediaUrl = url || "";
+    mediaKind = kind || "";
+    mediaStartedAtMs = Number(startedAt) || Date.now();
+    if (!mediaUrl) return;
+    if (mediaKind === "video") {
+      const video = document.createElement("video");
+      video.src = mediaUrl;
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.preload = "auto";
+      video.addEventListener("loadedmetadata", syncVideoPlayback, { once: true });
+      mediaElement = video;
+      void video.play().catch(() => undefined);
+    } else {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = mediaUrl;
+      mediaElement = image;
+    }
+  }
+
+  function syncVideoPlayback() {
+    if (!(mediaElement instanceof HTMLVideoElement) || !Number.isFinite(mediaElement.duration) || mediaElement.duration <= 0) return;
+    const target = ((Date.now() - mediaStartedAtMs) / 1000) % mediaElement.duration;
+    if (Math.abs(mediaElement.currentTime - target) > 1) {
+      try { mediaElement.currentTime = target; } catch { /* Metadata may not yet allow a seek. */ }
+    }
+    if (mediaElement.paused) void mediaElement.play().catch(() => undefined);
+  }
+
+  function drawMedia(element, brightness) {
+    const width = element instanceof HTMLVideoElement ? element.videoWidth : element.naturalWidth;
+    const height = element instanceof HTMLVideoElement ? element.videoHeight : element.naturalHeight;
+    if (!width || !height) return false;
+    if (element instanceof HTMLVideoElement) syncVideoPlayback();
+    const scale = Math.max(canvasWidth / width, canvasHeight / height);
+    const drawWidth = width * scale;
+    const drawHeight = height * scale;
+    fillBlack();
+    context.globalAlpha = Math.max(0, Math.min(1, brightness / 100));
+    context.drawImage(element, (canvasWidth - drawWidth) / 2, (canvasHeight - drawHeight) / 2, drawWidth, drawHeight);
+    context.globalAlpha = 1;
+    return true;
   }
 
   function updateDetails() {
@@ -648,6 +711,11 @@
     }
     if (!active || brightness <= 0) {
       fillBlack();
+      window.requestAnimationFrame(render);
+      return;
+    }
+
+    if (mediaElement && drawMedia(mediaElement, brightness)) {
       window.requestAnimationFrame(render);
       return;
     }

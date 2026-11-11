@@ -217,6 +217,8 @@ export function validateLightPatch(value: unknown): LightPatch {
     'fadeMs',
     'phaseOffset',
     'expectedRevision',
+    'mediaUrl',
+    'mediaKind',
   ]);
 
   if (Object.keys(record).length === 0) {
@@ -260,6 +262,18 @@ export function validateLightPatch(value: unknown): LightPatch {
   }
   if (record.phaseOffset !== undefined) {
     patch.phaseOffset = validateBoundedNumber(record.phaseOffset, 'phaseOffset', 0, 1);
+  }
+  if (record.mediaUrl !== undefined) {
+    if (record.mediaUrl !== null && (typeof record.mediaUrl !== 'string' || !/^\/media\/[0-9a-f-]{36}\.(jpg|png|webp|gif|mp4|webm)$/i.test(record.mediaUrl))) {
+      throw new ApiError(400, 'invalid_request', 'mediaUrl must be a WebGlow media asset path or null.', { field: 'mediaUrl' });
+    }
+    patch.mediaUrl = record.mediaUrl as string | null;
+  }
+  if (record.mediaKind !== undefined) {
+    if (record.mediaKind !== null && record.mediaKind !== 'image' && record.mediaKind !== 'video') {
+      throw new ApiError(400, 'invalid_request', 'mediaKind must be image, video, or null.', { field: 'mediaKind' });
+    }
+    patch.mediaKind = record.mediaKind as 'image' | 'video' | null;
   }
   if (record.expectedRevision !== undefined) {
     if (!Number.isInteger(record.expectedRevision) || (record.expectedRevision as number) < 0) {
@@ -306,14 +320,22 @@ export function validateChase(value: unknown): ChaseInput {
 
 export function validateCreateScene(value: unknown): CreateSceneInput {
   const record = asRecord(value, 'The request body');
-  rejectUnknownKeys(record, ['id', 'name', 'ids', 'state']);
+  rejectUnknownKeys(record, ['id', 'name', 'ids', 'state', 'scaleEffect']);
   const id = validateSceneId(record.id);
   const ids = validateTargetIds(record.ids);
   const state = validateLightPatch(record.state);
   if (state.name !== undefined || state.expectedRevision !== undefined || state.phaseOffset !== undefined) {
     throw new ApiError(400, 'invalid_request', 'Cue state can only include output fields.', { field: 'state' });
   }
-  const input: CreateSceneInput = { id, ids, state };
+  if (record.scaleEffect !== undefined && typeof record.scaleEffect !== 'boolean') {
+    throw new ApiError(400, 'invalid_request', 'scaleEffect must be a boolean.', { field: 'scaleEffect' });
+  }
+  const input: CreateSceneInput = {
+    id,
+    ids,
+    state,
+    ...(record.scaleEffect === undefined ? {} : { scaleEffect: record.scaleEffect as boolean }),
+  };
   if (record.name !== undefined) {
     input.name = validateName(record.name);
   }

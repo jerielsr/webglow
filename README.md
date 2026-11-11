@@ -26,7 +26,7 @@ Build and start the stack:
 docker compose --env-file .env up --build --detach
 ```
 
-The WebGlow portal is then available at `http://<server-ip>:1828`. Its saved lights live in the named Docker volume `webglow-data`.
+The WebGlow portal is then available at `http://<server-ip>:1828`. Its lights, settings, cues, command history, and uploaded media live in the named Docker volume `webglow-data`.
 
 Useful lifecycle commands:
 
@@ -94,7 +94,7 @@ docker compose --env-file .env -f compose.portainer.yaml pull
 docker compose --env-file .env -f compose.portainer.yaml up --detach
 ```
 
-For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds `lights.json` and keeps your configured lights.
+For updates, push a new image and use Portainer's **re-pull image and redeploy** option (or its Git/registry update automation). Do not delete the `webglow-data` volume during a normal redeploy: it holds the light state, cues, settings, command history, and media library.
 
 Open the portal at `http://<server-ip>:1828`. On its first visit, create the portal username and password. **Control** is the live console programmer and cue stack; **Setup** creates and manages fixtures; **Monitor** provides process, host, traffic, display-socket, and guest activity diagnostics; **Settings** contains server, container, account, and public-URL settings. Programmer and master changes are sent live after a short input debounce, so an Apply action is not required. The portal uses client-side navigation and includes a PWA manifest/service worker, so moving between these views does not reload the application.
 
@@ -152,6 +152,10 @@ WebGlow uses WLED's documented JSON API at /json and /json/state; the WLED devic
 For an audience, open **Settings** → **Audience registration** and enable guest access. WebGlow reveals a shareable join URL and an in-portal QR code. A guest opens the link, enters a display name, and is redirected to a unique full-screen light page. Their fixture appears immediately in the normal console fixture sheet, so it can be selected, programmed, included in cues, or controlled with every light at once.
 
 Guest registration is closed by default and is rate-limited to 12 registrations per source network every 10 minutes. Close it once everyone has joined. The **Masters** panel shows registered and active guest counts, active guest WebSocket connections, WebSocket data sent to guest displays, and the persisted state footprint for guest fixtures. This makes it practical to watch audience participation without exposing the portal login or API bearer token.
+
+In **Settings**, command-history retention can be set to all, one year, one month, one week, or one day; shortening retention permanently removes older entries, and the panel reports its on-disk footprint. The command line's **History** control opens the retained operator log in pages. Optional guest cleanup removes QR-created fixtures after their display has been absent for the selected inactivity period.
+
+The **Display media library** accepts JPEG, PNG, WebP, GIF, MP4, and WebM uploads up to 40 MB. Images, animated GIFs, and muted/looping videos are hosted in the persistent `DATA_DIR/media` folder and loaded by browser displays from their WebGlow URL. Video supports HTTP byte ranges and long-lived browser caching; the image/video bytes are not sent inside lighting WebSocket messages. To keep audience Wi‑Fi responsive, use short, low-resolution clips. When recording cues, choose **All current & future** to make a cue dynamically follow the fixture count; **Auto-scale effect** recalculates phase offsets whenever that active cue is run or the fixture roster changes.
 
 ## Control it
 
@@ -222,7 +226,11 @@ All successful light resources have this shape:
 | `POST` | `/api/v1/scenes/:sceneId/go` | Run a recorded cue. |
 | `DELETE` | `/api/v1/scenes/:sceneId` | Delete a recorded cue. |
 | `GET` | `/api/v1/metrics` | Process, host, and WebGlow traffic snapshot. |
+| `GET` | `/api/v1/history` | History count/storage summary; add `?includeEvents=true&offset=0` to fetch up to 200 newest-first entries per page. |
 | `GET` / `PATCH` | `/api/v1/settings` | Read or set the public application URL used in display links. |
+| `GET` / `POST` | `/api/v1/media` | List or upload display media (multipart field `file`). |
+| `DELETE` | `/api/v1/media/:assetId` | Remove a media asset and clear it from displays using it. |
+| `GET` | `/media/:assetId` | Public, cacheable media stream used by display devices. |
 | `GET` | `/api/v1/guest-registration` | Public registration availability check. |
 | `POST` | `/api/v1/guest-registration` | Publicly register one unique browser light when guest access is enabled. |
 | `GET` | `/api/v1/guest-registration/qr` | Authenticated SVG QR code for the join URL. |
@@ -231,7 +239,7 @@ All successful light resources have this shape:
 | `GET` | `/display/:id` | Full-screen browser renderer for that light. |
 | `GET` | `/api/v1/ws?role=display&lightId=:id` | Display-only live state stream. |
 
-For multi-light automation, `POST /api/v1/lights/batch` accepts `{ "ids": "all" | ["id"], "state": { ...patch } }`. `POST /api/v1/lights/chase` accepts `ids`, `speed`, `fadeMs`, optional `color`, and optional `on`; it assigns evenly spaced phase offsets. A console cue is recorded through `POST /api/v1/scenes` with an `id` such as `1` or `12.5`, a target `ids` value, and an output `state`.
+For multi-light automation, `POST /api/v1/lights/batch` accepts `{ "ids": "all" | ["id"], "state": { ...patch } }`. `POST /api/v1/lights/chase` accepts `ids`, `speed`, `fadeMs`, optional `color`, and optional `on`; it assigns evenly spaced phase offsets. A console cue is recorded through `POST /api/v1/scenes` with an `id` such as `1` or `12.5`, a target `ids` value, and an output `state`. Set `ids` to `all` for a dynamic cue that includes fixtures joining later; optional `scaleEffect: true` redistributes effect phase offsets when the cue runs and as the fixture roster changes.
 
 WLED fixtures accept the same output patches as displays. WebGlow translates brightness from 0–100 to WLED's 0–255 range, fade time to WLED transition units, colour to the configured segment, and semantic patterns to effect IDs discovered from that fixture. If an installed WLED build does not expose an equivalent effect, WebGlow still applies power, brightness, colour, speed, and fade without changing its active effect.
 

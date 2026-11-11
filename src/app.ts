@@ -1,13 +1,18 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
+import { dirname, extname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance, type FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 
+import { CommandHistoryStore, HISTORY_RETENTIONS, type HistoryRetention } from './command-history-store.js';
 import { getConfig, type WebglowConfig } from './config.js';
 import { ApiError } from './errors.js';
 import { LightStore } from './light-store.js';
@@ -29,6 +34,17 @@ import {
 } from './validation.js';
 
 const SESSION_COOKIE = 'webglow_portal_session';
+const MEDIA_TYPES: Record<string, { extension: string; kind: 'image' | 'video' }> = {
+  'image/jpeg': { extension: '.jpg', kind: 'image' },
+  'image/png': { extension: '.png', kind: 'image' },
+  'image/webp': { extension: '.webp', kind: 'image' },
+  'image/gif': { extension: '.gif', kind: 'image' },
+  'video/mp4': { extension: '.mp4', kind: 'video' },
+  'video/webm': { extension: '.webm', kind: 'video' },
+};
+const MEDIA_CONTENT_TYPES: Record<string, string> = Object.fromEntries(
+  Object.entries(MEDIA_TYPES).map(([contentType, value]) => [value.extension, contentType]),
+);
 
 export interface BuildAppOptions {
   config?: Partial<WebglowConfig>;
@@ -36,6 +52,7 @@ export interface BuildAppOptions {
   store?: LightStore;
   settingsStore?: SettingsStore;
   sceneStore?: SceneStore;
+  historyStore?: CommandHistoryStore;
   wledClient?: WledClient;
 }
 
@@ -47,6 +64,8 @@ function mergeConfig(overrides: Partial<WebglowConfig> = {}): WebglowConfig {
   if (overrides.dataFile && !overrides.scenesFile) {
     config.scenesFile = join(dirname(overrides.dataFile), 'scenes.json');
   }
+  if (overrides.dataFile && !overrides.historyFile) config.historyFile = join(dirname(overrides.dataFile), 'history.json');
+  if (overrides.dataFile && !overrides.mediaDirectory) config.mediaDirectory = join(dirname(overrides.dataFile), 'media');
   return config;
 }
 
@@ -149,13 +168,18 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   const store = options.store ?? new LightStore(config.dataFile);
   const settings = options.settingsStore ?? new SettingsStore(config.settingsFile);
   const scenes = options.sceneStore ?? new SceneStore(config.scenesFile);
+  const history = options.historyStore ?? new CommandHistoryStore(config.historyFile);
   const wled = options.wledClient ?? new WledClient();
   await Promise.all([store.initialize(), settings.initialize(), scenes.initialize()]);
+  await history.initialize(settings.getPublicSettings().historyRetention);
+  await mkdir(config.mediaDirectory, { recursive: true });
   const portalAuth = new PortalAuth(settings, config.passwordResetToken);
   const metrics = new Metrics();
   const guestConnections = new Map<string, number>();
   const guestRegistrationAttempts = new Map<string, { count: number; resetAt: number }>();
   let guestOutboundWebsocketBytes = 0;
+  let guestExpiryTimer: NodeJS.Timeout | undefined;
+  let activeScalableCueId: string | null = scenes.getActiveScalableCue() ?? null;
 
   const app = Fastify({ logger: options.logger ?? true, trustProxy: true });
 
@@ -212,6 +236,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       name: light.guest?.displayName ?? light.name,
       connected: (guestConnections.get(light.id) ?? 0) > 0,
       registeredAt: light.guest?.registeredAt,
+      lastSeenAt: light.guest?.lastSeenAt ?? light.guest?.registeredAt,
     }));
     return {
       registrationEnabled: settings.getPublicSettings().guestRegistrationEnabled,
@@ -225,6 +250,25 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       },
       guests: guestState,
     };
+  }
+
+  async function expireInactiveGuests(): Promise<number> {
+    const options = settings.getPublicSettings();
+    if (!options.guestAutoRemoveEnabled) return 0;
+    const cutoff = Date.now() - options.guestInactivityHours * 60 * 60_000;
+    const guests = (await store.list()).filter((light) => light.guest);
+    const expired = guests.filter((light) => {
+      if ((guestConnections.get(light.id) ?? 0) > 0) return false;
+      const lastSeen = Date.parse(light.guest?.lastSeenAt ?? light.guest?.registeredAt ?? '');
+      return Number.isFinite(lastSeen) && lastSeen < cutoff;
+    });
+    await Promise.all(expired.map(async (light) => {
+      await store.remove(light.id);
+      await scenes.removeFixture(light.id);
+      await history.record({ action: 'Guest expiry', summary: 'Removed inactive guest ' + (light.guest?.displayName ?? light.name), fixtureIds: [light.id] });
+    }));
+    if (expired.length) await applyActiveScalableCue();
+    return expired.length;
   }
 
   function hasOutputPatch(patch: LightPatch): boolean {
@@ -300,6 +344,22 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     );
   }
 
+  async function applyActiveScalableCue(): Promise<void> {
+    if (!activeScalableCueId) return;
+    const scene = await scenes.get(activeScalableCueId);
+    if (!scene || scene.ids !== 'all' || !scene.scaleEffect) {
+      activeScalableCueId = null;
+      await scenes.setActiveScalableCue(undefined);
+      return;
+    }
+    const lights = await store.list();
+    const count = Math.max(1, lights.length);
+    await updateLights(lights.map((light, index) => ({
+      id: light.id,
+      patch: { ...scene.state, phaseOffset: index / count },
+    })));
+  }
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ApiError) {
       if (error.statusCode === 401) reply.header('WWW-Authenticate', 'Bearer');
@@ -310,6 +370,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
           ...(error.details === undefined ? {} : { details: error.details }),
         },
       });
+      return;
+    }
+    if ((error as { code?: string; statusCode?: number }).code === 'FST_REQ_FILE_TOO_LARGE' || (error as { statusCode?: number }).statusCode === 413) {
+      void reply.status(413).send({ error: { code: 'media_too_large', message: 'Media files must be 40 MB or smaller.' } });
       return;
     }
     request.log.error(error);
@@ -326,9 +390,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return payload;
   });
   app.addHook('onClose', async () => {
-    await Promise.all([store.close(), settings.close(), scenes.close()]);
+    if (guestExpiryTimer) clearInterval(guestExpiryTimer);
+    await Promise.all([store.close(), settings.close(), scenes.close(), history.close()]);
   });
 
+  await app.register(multipart, { limits: { files: 1, fileSize: 40 * 1024 * 1024, fields: 2 } });
   await app.register(cookie);
   await app.register(cors, {
     origin: config.corsOrigin,
@@ -355,6 +421,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     capabilities: {
       patterns: [...PATTERNS],
       fixtureKinds: ['display', 'wled'],
+      media: ['jpeg', 'png', 'webp', 'gif', 'mp4', 'webm'],
+      commandHistory: [...HISTORY_RETENTIONS],
+      scalableCueEffects: true,
       brightness: { minimum: 0, maximum: 100, unit: 'rendered-percent' },
       fadeMs: { minimum: 0, maximum: 60_000 },
       synchronizedEffects: 'shared effect clock and WLED timebase',
@@ -444,9 +513,10 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   app.patch<{ Body: unknown }>('/api/v1/settings', async (request) => {
     requireControllerAccess(request);
+    const previousRetention = settings.getPublicSettings().historyRetention;
     const body = asRecord(request.body, 'The request body');
-    rejectKeys(body, ['publicBaseUrl', 'guestRegistrationEnabled']);
-    if (!Object.hasOwn(body, 'publicBaseUrl') && !Object.hasOwn(body, 'guestRegistrationEnabled')) {
+    rejectKeys(body, ['publicBaseUrl', 'guestRegistrationEnabled', 'historyRetention', 'guestAutoRemoveEnabled', 'guestInactivityHours']);
+    if (!Object.keys(body).length) {
       throw new ApiError(400, 'invalid_request', 'Provide a setting to update.');
     }
     if (body.guestRegistrationEnabled !== undefined && typeof body.guestRegistrationEnabled !== 'boolean') {
@@ -454,10 +524,24 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         field: 'guestRegistrationEnabled',
       });
     }
-    return settings.updatePublicSettings({
+    if (body.historyRetention !== undefined && !HISTORY_RETENTIONS.includes(body.historyRetention as HistoryRetention)) {
+      throw new ApiError(400, 'invalid_request', 'historyRetention must be all, year, month, week, or day.', { field: 'historyRetention' });
+    }
+    if (body.guestAutoRemoveEnabled !== undefined && typeof body.guestAutoRemoveEnabled !== 'boolean') {
+      throw new ApiError(400, 'invalid_request', 'guestAutoRemoveEnabled must be true or false.', { field: 'guestAutoRemoveEnabled' });
+    }
+    if (body.guestInactivityHours !== undefined && ![1, 6, 12, 24, 72, 168].includes(body.guestInactivityHours as number)) {
+      throw new ApiError(400, 'invalid_request', 'guestInactivityHours must be 1, 6, 12, 24, 72, or 168.', { field: 'guestInactivityHours' });
+    }
+    const updated = await settings.updatePublicSettings({
       ...(Object.hasOwn(body, 'publicBaseUrl') ? { publicBaseUrl: validatePublicBaseUrl(body.publicBaseUrl) } : {}),
       ...(Object.hasOwn(body, 'guestRegistrationEnabled') ? { guestRegistrationEnabled: body.guestRegistrationEnabled as boolean } : {}),
+      ...(Object.hasOwn(body, 'historyRetention') ? { historyRetention: body.historyRetention as HistoryRetention } : {}),
+      ...(Object.hasOwn(body, 'guestAutoRemoveEnabled') ? { guestAutoRemoveEnabled: body.guestAutoRemoveEnabled as boolean } : {}),
+      ...(Object.hasOwn(body, 'guestInactivityHours') ? { guestInactivityHours: body.guestInactivityHours as number } : {}),
     });
+    if (updated.historyRetention !== previousRetention) await history.setRetention(updated.historyRetention);
+    return updated;
   });
 
   app.get('/api/v1/metrics', async (request) => {
@@ -465,9 +549,112 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     return metrics.snapshot();
   });
 
+  app.get('/api/v1/history', async (request) => {
+    requireControllerAccess(request);
+    const query = new URL(request.raw.url ?? '/api/v1/history', 'http://webglow.local').searchParams;
+    if (query.get('includeEvents') !== 'true') return history.summary();
+    const offset = Number(query.get('offset') ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new ApiError(400, 'invalid_history_offset', 'History offset must be a non-negative integer.');
+    }
+    return history.list(offset, 200);
+  });
+
   app.get('/api/v1/guests', async (request) => {
     requireControllerAccess(request);
     return guestSnapshot(request);
+  });
+
+  app.get('/api/v1/media', async (request) => {
+    requireControllerAccess(request);
+    const entries = await readdir(config.mediaDirectory, { withFileTypes: true });
+    const assets = await Promise.all(entries.filter((entry) => entry.isFile() && Object.hasOwn(MEDIA_CONTENT_TYPES, extname(entry.name).toLowerCase())).map(async (entry) => {
+      const info = await stat(join(config.mediaDirectory, entry.name));
+      return {
+        id: entry.name,
+        url: '/media/' + encodeURIComponent(entry.name),
+        kind: MEDIA_TYPES[MEDIA_CONTENT_TYPES[extname(entry.name).toLowerCase()]].kind,
+        sizeBytes: info.size,
+        updatedAt: info.mtime.toISOString(),
+      };
+    }));
+    return { assets: assets.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)) };
+  });
+
+  app.post('/api/v1/media', { bodyLimit: 42 * 1024 * 1024 }, async (request, reply) => {
+    requireControllerAccess(request);
+    const upload = await request.file();
+    if (!upload) throw new ApiError(400, 'media_file_required', 'Choose one image, GIF, MP4, or WebM file to upload.');
+    const type = MEDIA_TYPES[upload.mimetype.toLowerCase()];
+    if (!type) {
+      upload.file.resume();
+      throw new ApiError(415, 'unsupported_media_type', 'Supported media: JPEG, PNG, WebP, GIF, MP4, and WebM.');
+    }
+    const id = randomUUID() + type.extension;
+    const destination = join(config.mediaDirectory, id);
+    try { await pipeline(upload.file, createWriteStream(destination, { flags: 'wx' })); } catch (error) {
+      await unlink(destination).catch(() => undefined);
+      throw error;
+    }
+    if (upload.file.truncated) {
+      await unlink(destination).catch(() => undefined);
+      throw new ApiError(413, 'media_too_large', 'Media files must be 40 MB or smaller.');
+    }
+    const info = await stat(destination);
+    await history.record({ action: 'Media upload', summary: 'Uploaded ' + upload.filename, fixtureIds: [], detail: Math.round(info.size / 1024) + ' KB' });
+    return reply.status(201).send({
+      asset: { id, url: '/media/' + encodeURIComponent(id), kind: type.kind, sizeBytes: info.size, updatedAt: info.mtime.toISOString() },
+    });
+  });
+
+  app.delete<{ Params: { assetId: string } }>('/api/v1/media/:assetId', async (request, reply) => {
+    requireControllerAccess(request);
+    const id = request.params.assetId;
+    if (!/^[0-9a-f-]{36}\.(jpg|png|webp|gif|mp4|webm)$/i.test(id)) {
+      throw new ApiError(400, 'invalid_media_id', 'The media ID is invalid.');
+    }
+    try { await stat(join(config.mediaDirectory, id)); } catch {
+      throw new ApiError(404, 'media_not_found', 'The requested media file does not exist.');
+    }
+    const assetUrl = '/media/' + encodeURIComponent(id);
+    const affected = (await store.list()).filter((light) => light.kind === 'display' && light.state.mediaUrl === assetUrl);
+    if (affected.length) await updateLights(affected.map((light) => ({ id: light.id, patch: { mediaUrl: null, mediaKind: null } })));
+    const cuesUpdated = await scenes.clearMedia(assetUrl);
+    await unlink(join(config.mediaDirectory, id));
+    await history.record({ action: 'Media delete', summary: 'Deleted media ' + id, fixtureIds: affected.map((light) => light.id), detail: cuesUpdated ? 'Cleared from ' + cuesUpdated + ' cue(s)' : undefined });
+    return reply.status(204).send();
+  });
+
+  app.get<{ Params: { assetId: string } }>('/media/:assetId', async (request, reply) => {
+    const id = request.params.assetId;
+    const extension = extname(id).toLowerCase();
+    if (!/^[0-9a-f-]{36}\.(jpg|png|webp|gif|mp4|webm)$/i.test(id) || !MEDIA_CONTENT_TYPES[extension]) {
+      throw new ApiError(404, 'media_not_found', 'The requested media file does not exist.');
+    }
+    let info;
+    try { info = await stat(join(config.mediaDirectory, id)); } catch {
+      throw new ApiError(404, 'media_not_found', 'The requested media file does not exist.');
+    }
+    const range = request.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+    const mediaStream = (start?: number, end?: number) => {
+      const stream = createReadStream(join(config.mediaDirectory, id), { ...(start === undefined ? {} : { start }), ...(end === undefined ? {} : { end }) });
+      stream.on('data', (chunk: Buffer) => metrics.recordResponse(chunk.length));
+      return stream;
+    };
+    if (range && (range[1] || range[2])) {
+      const suffix = Number(range[2]);
+      const start = range[1] ? Number(range[1]) : Math.max(0, info.size - suffix);
+      const end = Math.min(info.size - 1, range[2] ? Number(range[2]) : info.size - 1);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !range[1] && suffix <= 0 || start >= info.size || start > end) {
+        return reply.status(416).header('Content-Range', 'bytes */' + info.size).send();
+      }
+      return reply.status(206).header('Accept-Ranges', 'bytes').header('Content-Range', 'bytes ' + start + '-' + end + '/' + info.size)
+        .header('Content-Length', String(end - start + 1)).header('Cache-Control', 'public, max-age=31536000, immutable')
+        .header('X-Content-Type-Options', 'nosniff').type(MEDIA_CONTENT_TYPES[extension]).send(mediaStream(start, end));
+    }
+    return reply.header('Accept-Ranges', 'bytes').header('Content-Length', String(info.size))
+      .header('Cache-Control', 'public, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff')
+      .type(MEDIA_CONTENT_TYPES[extension]).send(mediaStream());
   });
 
   app.get('/api/v1/guest-registration', async () => ({
@@ -495,9 +682,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       id: 'guest-' + randomUUID().slice(0, 8),
       name: displayName + "'s light",
       kind: 'display',
-      guest: { displayName, registeredAt: new Date().toISOString() },
+      guest: { displayName, registeredAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() },
     });
-    return reply.status(201).send({ light, displayPath: displayPath(light.id) });
+    await history.record({ action: 'Guest join', summary: displayName + ' registered a light', fixtureIds: [light.id] });
+    await applyActiveScalableCue();
+    return reply.status(201).send({ light: (await store.get(light.id)) ?? light, displayPath: displayPath(light.id) });
   });
 
   app.get('/api/v1/lights', async (request) => {
@@ -524,10 +713,14 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         fadeMs: inspected.state.fadeMs,
         phaseOffset: inspected.state.phaseOffset,
       })) as LightResource;
-      return reply.status(201).send({ light });
+      await history.record({ action: 'Fixture create', summary: 'Connected WLED ' + light.name, fixtureIds: [light.id] });
+      await applyActiveScalableCue();
+      return reply.status(201).send({ light: (await store.get(light.id)) ?? light });
     }
     const light = await store.create(input);
-    return reply.status(201).send({ light, displayPath: displayPath(light.id) });
+    await history.record({ action: 'Fixture create', summary: 'Created ' + light.name, fixtureIds: [light.id] });
+    await applyActiveScalableCue();
+    return reply.status(201).send({ light: (await store.get(light.id)) ?? light, displayPath: displayPath(light.id) });
   });
 
   app.get<{ Params: { lightId: string } }>('/api/v1/lights/:lightId', async (request) => {
@@ -535,6 +728,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const light = await store.get(id);
     if (!light) throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
     if (light.kind === 'wled') requireControllerAccess(request);
+    if (light.guest) return (await store.touchGuest(id)) ?? light;
     return light;
   });
 
@@ -543,6 +737,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const id = validateLightId(request.params.lightId);
     const light = (await updateLights([{ id, patch: validateLightPatch(request.body) }]))[0];
     if (!light) throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
+    await history.record({ action: 'Programmer update', summary: 'Updated ' + light.name, fixtureIds: [id] });
     return light;
   });
 
@@ -577,6 +772,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       throw new ApiError(404, 'light_not_found', 'One or more selected lights do not exist.', { ids: missing });
     }
     const lights = await updateLights(targetIds.map((id) => ({ id, patch: input.state })));
+    await history.record({ action: 'Batch programmer', summary: 'Updated ' + lights.length + ' fixture' + (lights.length === 1 ? '' : 's'), fixtureIds: targetIds, detail: Object.keys(input.state).filter((key) => key !== 'expectedRevision').join(', ') });
     return { lights, count: lights.length };
   });
 
@@ -603,6 +799,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         } satisfies LightPatch,
       })),
     );
+    await history.record({ action: 'Chase', summary: 'Programmed chase across ' + lights.length + ' fixtures', fixtureIds: targetIds });
     return { lights, count: lights.length };
   });
 
@@ -614,6 +811,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.post<{ Body: unknown }>('/api/v1/scenes', async (request, reply) => {
     requireControllerAccess(request);
     const scene = await scenes.create(validateCreateScene(request.body));
+    await history.record({ action: 'Cue record', summary: 'Recorded Cue ' + scene.id + ' · ' + scene.name, fixtureIds: scene.ids === 'all' ? (await store.list()).map((light) => light.id) : scene.ids });
     return reply.status(201).send({ scene });
   });
 
@@ -630,7 +828,13 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (missing.length > 0) {
       throw new ApiError(409, 'cue_targets_missing', 'This cue includes lights that no longer exist.', { ids: missing });
     }
-    const lights = await updateLights(targetIds.map((lightId) => ({ id: lightId, patch: scene.state })));
+    const lights = await updateLights(targetIds.map((lightId, index) => ({
+      id: lightId,
+      patch: { ...scene.state, ...(scene.scaleEffect ? { phaseOffset: index / Math.max(1, targetIds.length) } : {}) },
+    })));
+    activeScalableCueId = scene.ids === 'all' && scene.scaleEffect ? scene.id : null;
+    await scenes.setActiveScalableCue(activeScalableCueId ?? undefined);
+    await history.record({ action: 'Cue GO', summary: 'Ran Cue ' + scene.id + ' · ' + scene.name, fixtureIds: targetIds });
     return { scene, lights, count: lights.length };
   });
 
@@ -641,6 +845,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     if (!scene) {
       throw new ApiError(404, 'cue_not_found', 'No cue exists with number "' + id + '".');
     }
+    if (activeScalableCueId === scene.id) activeScalableCueId = null;
+    await history.record({ action: 'Cue delete', summary: 'Deleted Cue ' + scene.id, fixtureIds: scene.ids === 'all' ? [] : scene.ids });
     return reply.status(204).send();
   });
 
@@ -649,6 +855,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     const id = validateLightId(request.params.lightId);
     const light = await store.remove(id);
     if (!light) throw new ApiError(404, 'light_not_found', `No light exists with ID "${id}".`);
+    await scenes.removeFixture(id);
+    await applyActiveScalableCue();
+    await history.record({ action: 'Fixture delete', summary: 'Deleted ' + light.name, fixtureIds: [id] });
     return reply.status(204).send();
   });
 
@@ -689,6 +898,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         const remaining = Math.max(0, (guestConnections.get(lightId) ?? 1) - 1);
         if (remaining === 0) guestConnections.delete(lightId);
         else guestConnections.set(lightId, remaining);
+        void store.touchGuest(lightId, Date.now(), true).catch((error: unknown) => app.log.error(error, 'Unable to persist guest last-seen time.'));
         guestConnection = false;
       }
       unsubscribe?.();
@@ -707,7 +917,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
     void store
       .get(lightId)
-      .then((light) => {
+      .then(async (light) => {
         if (closed) return;
         if (!light) {
           socket.close(1008, 'The requested light does not exist.');
@@ -720,6 +930,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         if (light.guest) {
           guestConnection = true;
           guestConnections.set(lightId, (guestConnections.get(lightId) ?? 0) + 1);
+          light = (await store.touchGuest(lightId)) ?? light;
         }
         send(websocketMessage('state.snapshot', light));
         const unsubscribeChanged = store.onChange((changedLight) => {
@@ -741,6 +952,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
         socket.close(1011, 'Unable to load light state.');
       });
   });
+
+  guestExpiryTimer = setInterval(() => {
+    void expireInactiveGuests().catch((error: unknown) => app.log.error(error, 'Unable to expire inactive guest lights.'));
+  }, 60_000);
+  guestExpiryTimer.unref();
+  void expireInactiveGuests().catch((error: unknown) => app.log.error(error, 'Unable to expire inactive guest lights.'));
 
   return app;
 }

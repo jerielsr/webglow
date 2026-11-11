@@ -13,6 +13,9 @@
     metricsTimer: null,
     metrics: null,
     guests: null,
+    history: null,
+    mediaAssets: [],
+    selectedMediaId: null,
     masterLayout: "standard",
     blackoutActive: false,
     blackoutRestoreIds: [],
@@ -47,13 +50,16 @@
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       cache: "no-store",
     });
-    if (response.status === 204) return undefined;
     const body = await response.json().catch(() => undefined);
     if (!response.ok) {
       const error = new Error(body?.error?.message || "Request failed (" + response.status + ").");
       error.status = response.status;
       throw error;
     }
+    if ((options.method || "GET").toUpperCase() !== "GET" && state.history) {
+      window.setTimeout(() => { void loadHistory(!$("#command-history-panel").hidden).catch(() => undefined); }, 0);
+    }
+    if (response.status === 204) return undefined;
     return body;
   }
   function element(tag, className, text) {
@@ -287,7 +293,7 @@
       row.append(
         element("strong", "cue-number", scene.id),
         element("span", "cue-name", scene.name),
-        element("span", "cue-targets", scene.ids === "all" ? "All" : scene.ids.length + " selected"),
+        element("span", "cue-targets", (scene.ids === "all" ? "All · dynamic" : scene.ids.length + " selected") + (scene.scaleEffect ? " · scaled" : "")),
         element("span", "cue-fade", (Number(scene.state.fadeMs || 0) / 1000) + " s"),
       );
       const actions = element("div", "cue-actions");
@@ -349,6 +355,71 @@
       root.append(row);
     });
   }
+  function renderCommandHistory() {
+    const list = $("#command-history-list");
+    list.replaceChildren();
+    const data = state.history || { events: [], count: 0, storageBytes: 0, retention: state.settings.historyRetention || "month" };
+    const events = data.events || [];
+    $("#history-summary").textContent = data.count + " commands · " + formatBytes(data.storageBytes);
+    $("#history-load-older").hidden = !data.hasMore;
+    if (!events.length) {
+      const emptyMessage = data.count > 0
+        ? "Open History to load the retained command list."
+        : "No commands in the selected history window yet.";
+      list.append(element("p", "console-empty", emptyMessage));
+      return;
+    }
+    events.forEach((entry) => {
+      const row = element("article", "history-row");
+      const stamp = new Date(entry.at);
+      row.append(
+        element("time", "history-time", Number.isNaN(stamp.getTime()) ? "—" : stamp.toLocaleString()),
+        element("strong", "history-action", entry.action),
+        element("span", "history-summary-text", entry.summary),
+        element("span", "history-fixtures", entry.fixtureIds?.length ? entry.fixtureIds.length + " fixtures" : "system"),
+      );
+      if (entry.detail) row.append(element("small", "history-detail", entry.detail));
+      list.append(row);
+    });
+    if (data.count > events.length) list.append(element("p", "history-detail", "Showing the latest " + events.length + " of " + data.count + " retained commands."));
+  }
+  function renderMediaLibrary() {
+    const list = $("#media-library");
+    list.replaceChildren();
+    const totalBytes = state.mediaAssets.reduce((total, asset) => total + asset.sizeBytes, 0);
+    $("#media-storage").textContent = formatBytes(totalBytes) + " stored";
+    $("#apply-media").disabled = !state.mediaAssets.some((asset) => asset.id === state.selectedMediaId);
+    state.mediaAssets.forEach((asset) => {
+      const row = element("article", "media-card" + (asset.id === state.selectedMediaId ? " selected" : ""));
+      const choose = button("", "media-select");
+      choose.setAttribute("aria-pressed", String(asset.id === state.selectedMediaId));
+      if (asset.kind === "image") {
+        const image = element("img");
+        image.src = asset.url;
+        image.alt = "";
+        choose.append(image);
+      } else {
+        choose.append(element("span", "media-video-mark", "▶"));
+      }
+      const details = element("div", "media-card-details");
+      details.append(element("b", "", asset.id), element("span", "", asset.kind.toUpperCase() + " · " + formatBytes(asset.sizeBytes)));
+      const remove = button("Delete", "console-button subtle-button");
+      choose.addEventListener("click", () => { state.selectedMediaId = asset.id; renderMediaLibrary(); });
+      remove.addEventListener("click", async () => {
+        if (!window.confirm("Delete this media file? Displays using it will no longer be able to load it.")) return;
+        try {
+          await api("/media/" + encodeURIComponent(asset.id), { method: "DELETE" });
+          state.mediaAssets = state.mediaAssets.filter((candidate) => candidate.id !== asset.id);
+          if (state.selectedMediaId === asset.id) state.selectedMediaId = null;
+          renderMediaLibrary();
+          notify("Media deleted.", "success");
+        } catch (error) { handleError(error); }
+      });
+      row.append(choose, details, remove);
+      list.append(row);
+    });
+    if (!state.mediaAssets.length) list.append(element("p", "console-empty", "Upload media to create a reusable look."));
+  }
   function renderMonitoring() {
     const metrics = state.metrics;
     const guests = state.guests;
@@ -392,7 +463,8 @@
     guestList.replaceChildren();
     (guests?.guests || []).slice(0, 24).forEach((guest) => {
       const row = element("div", "monitor-guest" + (guest.connected ? " connected" : ""));
-      row.append(element("b", "", guest.name), element("span", "", guest.connected ? "Connected" : "Offline"));
+      const seen = guest.lastSeenAt ? new Date(guest.lastSeenAt).toLocaleString() : "unknown";
+      row.append(element("b", "", guest.name), element("span", "", guest.connected ? "Connected" : "Offline · " + seen));
       guestList.append(row);
     });
     if (!(guests?.guests || []).length) guestList.append(element("p", "console-empty", "No guest lights have registered."));
@@ -420,11 +492,29 @@
     $("#public-base-url").value = state.settings.publicBaseUrl || "";
     renderServerDetails(state.metrics);
     renderGuestSharing();
+    $("#history-retention").value = state.settings.historyRetention || "month";
+    $("#guest-auto-remove-enabled").checked = state.settings.guestAutoRemoveEnabled === true;
+    $("#guest-inactivity-hours").value = String(state.settings.guestInactivityHours || 24);
   }
   async function loadGuests() {
     const guests = await api("/guests");
     state.guests = guests;
     renderMonitoring();
+  }
+  async function loadHistory(includeEvents = false, append = false) {
+    const offset = append ? (state.history?.events?.length || 0) : 0;
+    const query = includeEvents ? "?includeEvents=true&offset=" + offset : "";
+    const result = await api("/history" + query);
+    if (append && state.history) result.events = [...(state.history.events || []), ...(result.events || [])];
+    state.history = result;
+    renderCommandHistory();
+    $("#history-storage").textContent = state.history.count + " commands · " + formatBytes(state.history.storageBytes) + " on disk";
+  }
+  async function loadMedia() {
+    const response = await api("/media");
+    state.mediaAssets = response.assets || [];
+    if (!state.mediaAssets.some((asset) => asset.id === state.selectedMediaId)) state.selectedMediaId = null;
+    renderMediaLibrary();
   }
   async function loadMetrics() {
     try {
@@ -532,9 +622,20 @@
     try {
       const id = $("#cue-number").value.trim();
       const name = $("#cue-name").value.trim();
+      const targetMode = $("#cue-target-mode").value;
+      if (targetMode === "selected" && !state.selected.size) {
+        notify("Select fixtures or choose All current & future for a dynamic cue.", "error");
+        return;
+      }
       const result = await api("/scenes", {
         method: "POST",
-        body: { id, ...(name ? { name } : {}), ids: targetIds(), state: effectiveProgrammer() },
+        body: {
+          id,
+          ...(name ? { name } : {}),
+          ids: targetMode === "all" ? "all" : [...state.selected],
+          state: effectiveProgrammer(),
+          scaleEffect: $("#cue-scale-effect").checked,
+        },
       });
       state.scenes.push(result.scene);
       state.scenes.sort((left, right) => Number(left.id) - Number(right.id));
@@ -542,6 +643,7 @@
       const next = Number(id) + 1;
       if (Number.isFinite(next)) $("#cue-number").value = String(next);
       $("#cue-name").value = "";
+      await loadHistory();
       notify("Cue " + id + " recorded.", "success");
     } catch (error) { handleError(error); }
   }
@@ -635,12 +737,13 @@
       state.status = await api("/auth/status");
       if (!state.status.authenticated) { showAuth(); return; }
       $("#auth-dialog").hidden = true;
-      await Promise.all([loadLights(), loadScenes(), loadSettings(), loadMetrics(), loadGuests()]);
+      await Promise.all([loadLights(), loadScenes(), loadSettings(), loadMetrics(), loadGuests(), loadHistory(), loadMedia()]);
       switchView(window.location.pathname, true);
       if (state.metricsTimer) window.clearInterval(state.metricsTimer);
       state.metricsTimer = window.setInterval(() => {
         void loadMetrics();
         void loadGuests().catch(handleError);
+        void loadHistory(!$("#command-history-panel").hidden).catch(handleError);
       }, 15000);
     } catch (error) { handleError(error); }
   }
@@ -667,6 +770,18 @@
     switchView(new URL(link.href).pathname);
   });
   window.addEventListener("popstate", () => switchView(window.location.pathname, true));
+  $("#toggle-command-history").addEventListener("click", () => {
+    const panel = $("#command-history-panel");
+    panel.hidden = !panel.hidden;
+    $("#toggle-command-history").setAttribute("aria-expanded", String(!panel.hidden));
+    if (!panel.hidden) void loadHistory(true).catch(handleError);
+  });
+  $("#history-load-older").addEventListener("click", async (event) => {
+    const control = event.currentTarget;
+    control.disabled = true;
+    try { await loadHistory(true, true); } catch (error) { handleError(error); }
+    finally { control.disabled = false; }
+  });
   $("#program-brightness").addEventListener("input", (event) => {
     updateFaderOutput(event.currentTarget, $("#program-brightness-output"), "%");
     syncProgrammerFromInputs(); updateCommandLine(); scheduleProgrammerApply();
@@ -774,6 +889,66 @@
   });
   $("#use-current-url").addEventListener("click", () => { $("#public-base-url").value = window.location.origin; });
   $("#refresh-monitor").addEventListener("click", () => { void Promise.all([loadMetrics(), loadGuests()]).catch(handleError); });
+  $("#history-retention-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/settings", { method: "PATCH", body: { historyRetention: $("#history-retention").value } });
+      state.settings = { ...state.settings, ...result };
+      await loadHistory();
+      notify("History retention saved. Older entries were removed.", "success");
+    } catch (error) { handleError(error); }
+  });
+  $("#guest-expiry-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api("/settings", {
+        method: "PATCH",
+        body: { guestAutoRemoveEnabled: $("#guest-auto-remove-enabled").checked, guestInactivityHours: Number($("#guest-inactivity-hours").value) },
+      });
+      state.settings = { ...state.settings, ...result };
+      notify(result.guestAutoRemoveEnabled ? "Inactive guest cleanup enabled." : "Inactive guest cleanup disabled.", "success");
+    } catch (error) { handleError(error); }
+  });
+  $("#media-upload-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("#media-file");
+    if (!input.files?.[0]) return;
+    const form = new FormData();
+    form.append("file", input.files[0]);
+    try {
+      const response = await fetch(API + "/media", { method: "POST", credentials: "same-origin", body: form, cache: "no-store" });
+      const result = await response.json().catch(() => undefined);
+      if (!response.ok) throw new Error(result?.error?.message || "Upload failed (" + response.status + ").");
+      input.value = "";
+      state.selectedMediaId = result.asset.id;
+      await loadMedia();
+      await loadHistory();
+      notify("Media uploaded and ready to play.", "success");
+    } catch (error) { handleError(error); }
+  });
+  async function applyMediaAsset(clear = false) {
+    const asset = state.mediaAssets.find((candidate) => candidate.id === state.selectedMediaId);
+    if (!clear && !asset) { notify("Choose an item from the media library first.", "error"); return; }
+    const mode = $("#media-target-mode").value;
+    const targets = mode === "all"
+      ? state.lights.filter((light) => light.kind !== "wled")
+      : state.lights.filter((light) => state.selected.has(light.id) && light.kind !== "wled");
+    if (!targets.length) { notify(mode === "selected" ? "Select one or more browser fixtures first." : "No browser fixtures are available.", "error"); return; }
+    try {
+      await api("/lights/batch", {
+        method: "POST",
+        body: {
+          ids: targets.map((light) => light.id),
+          state: clear ? { mediaUrl: null, mediaKind: null } : { on: true, mediaUrl: asset.url, mediaKind: asset.kind },
+        },
+      });
+      await loadLights();
+      await loadHistory();
+      notify(clear ? "Media cleared from " + targets.length + " display(s)." : "Media is playing on " + targets.length + " display(s).", "success");
+    } catch (error) { handleError(error); }
+  }
+  $("#apply-media").addEventListener("click", () => { void applyMediaAsset(); });
+  $("#clear-media").addEventListener("click", () => { void applyMediaAsset(true); });
   $("#guest-registration-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {

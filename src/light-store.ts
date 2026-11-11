@@ -49,7 +49,8 @@ function hasWledShape(value: unknown): value is WledFixtureConfig {
 function hasGuestShape(value: unknown): value is GuestFixtureConfig {
   if (typeof value !== 'object' || value === null) return false;
   const guest = value as Partial<GuestFixtureConfig>;
-  return typeof guest.registeredAt === 'string' && typeof guest.displayName === 'string';
+  return typeof guest.registeredAt === 'string' && typeof guest.displayName === 'string' &&
+    (guest.lastSeenAt === undefined || typeof guest.lastSeenAt === 'string');
 }
 
 function hasPersistedLightShape(value: unknown): value is LightResource {
@@ -73,7 +74,10 @@ function hasPersistedLightShape(value: unknown): value is LightResource {
     typeof state.speed === 'number' &&
     typeof state.patternStartedAt === 'number' &&
     (state.fadeMs === undefined || typeof state.fadeMs === 'number') &&
-    (state.phaseOffset === undefined || typeof state.phaseOffset === 'number')
+    (state.phaseOffset === undefined || typeof state.phaseOffset === 'number') &&
+    (state.mediaUrl === undefined || typeof state.mediaUrl === 'string') &&
+    (state.mediaKind === undefined || state.mediaKind === 'image' || state.mediaKind === 'video') &&
+    (state.mediaStartedAt === undefined || typeof state.mediaStartedAt === 'number')
   );
 }
 
@@ -233,6 +237,20 @@ export class LightStore {
     return result;
   }
 
+  async touchGuest(id: string, timestamp = Date.now(), force = false): Promise<LightResource | undefined> {
+    const current = this.lights.get(id);
+    if (!current?.guest) return current ? cloneLight(current) : undefined;
+    const previousSeen = Date.parse(current.guest.lastSeenAt ?? current.guest.registeredAt);
+    if (!force && Number.isFinite(previousSeen) && timestamp - previousSeen < 60_000) return cloneLight(current);
+    const next: LightResource = {
+      ...current,
+      guest: { ...current.guest, lastSeenAt: new Date(timestamp).toISOString() },
+    };
+    this.lights.set(id, next);
+    try { await this.persist(); } catch (error) { this.lights.set(id, current); throw error; }
+    return cloneLight(next);
+  }
+
   onChange(listener: (light: LightResource) => void): () => void {
     this.events.on('changed', listener);
     return () => this.events.off('changed', listener);
@@ -285,7 +303,16 @@ export class LightStore {
       ...(patch.speed === undefined ? {} : { speed: patch.speed }),
       ...(patch.fadeMs === undefined ? {} : { fadeMs: patch.fadeMs }),
       ...(patch.phaseOffset === undefined ? {} : { phaseOffset: patch.phaseOffset }),
+      ...(patch.mediaUrl === undefined ? {} : { mediaUrl: patch.mediaUrl || undefined }),
+      ...(patch.mediaKind === undefined ? {} : { mediaKind: patch.mediaKind || undefined }),
     };
+    if (patch.mediaUrl === null) {
+      nextState.mediaUrl = undefined;
+      nextState.mediaKind = undefined;
+    }
+    if (patch.mediaUrl !== undefined || patch.mediaKind !== undefined) {
+      nextState.mediaStartedAt = nextState.mediaUrl ? timestamp : undefined;
+    }
     const effectChanged =
       nextState.pattern !== currentState.pattern ||
       nextState.speed !== currentState.speed ||
@@ -302,7 +329,10 @@ export class LightStore {
       nextState.pattern !== currentState.pattern ||
       nextState.speed !== currentState.speed ||
       nextState.fadeMs !== currentState.fadeMs ||
-      nextState.phaseOffset !== currentState.phaseOffset;
+      nextState.phaseOffset !== currentState.phaseOffset ||
+      nextState.mediaUrl !== currentState.mediaUrl ||
+      nextState.mediaKind !== currentState.mediaKind ||
+      nextState.mediaStartedAt !== currentState.mediaStartedAt;
 
     if (!changed) {
       return current;

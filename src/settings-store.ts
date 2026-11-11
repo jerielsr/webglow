@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 
 import { ApiError } from './errors.js';
+import { HISTORY_RETENTIONS, type HistoryRetention } from './command-history-store.js';
 
 const scrypt = promisify(scryptCallback);
 
@@ -18,12 +19,18 @@ interface PersistedSettings {
   version: 1;
   publicBaseUrl?: string;
   guestRegistrationEnabled?: boolean;
+  historyRetention?: HistoryRetention;
+  guestAutoRemoveEnabled?: boolean;
+  guestInactivityHours?: number;
   portalAccount?: PortalAccount;
 }
 
 export interface PublicSettings {
   publicBaseUrl?: string;
   guestRegistrationEnabled: boolean;
+  historyRetention: HistoryRetention;
+  guestAutoRemoveEnabled: boolean;
+  guestInactivityHours: number;
 }
 
 function cloneSettings(settings: PersistedSettings): PersistedSettings {
@@ -31,6 +38,9 @@ function cloneSettings(settings: PersistedSettings): PersistedSettings {
     version: 1,
     ...(settings.publicBaseUrl ? { publicBaseUrl: settings.publicBaseUrl } : {}),
     ...(settings.guestRegistrationEnabled ? { guestRegistrationEnabled: true } : {}),
+    ...(settings.historyRetention ? { historyRetention: settings.historyRetention } : {}),
+    ...(settings.guestAutoRemoveEnabled ? { guestAutoRemoveEnabled: true } : {}),
+    ...(settings.guestInactivityHours ? { guestInactivityHours: settings.guestInactivityHours } : {}),
     ...(settings.portalAccount ? { portalAccount: { ...settings.portalAccount } } : {}),
   };
 }
@@ -45,6 +55,9 @@ function hasSettingsShape(value: unknown): value is PersistedSettings {
     settings.version === 1 &&
     (settings.publicBaseUrl === undefined || typeof settings.publicBaseUrl === 'string') &&
     (settings.guestRegistrationEnabled === undefined || typeof settings.guestRegistrationEnabled === 'boolean') &&
+    (settings.historyRetention === undefined || HISTORY_RETENTIONS.includes(settings.historyRetention)) &&
+    (settings.guestAutoRemoveEnabled === undefined || typeof settings.guestAutoRemoveEnabled === 'boolean') &&
+    (settings.guestInactivityHours === undefined || [1, 6, 12, 24, 72, 168].includes(settings.guestInactivityHours)) &&
     (account === undefined ||
       (typeof account.username === 'string' &&
         typeof account.passwordSalt === 'string' &&
@@ -94,6 +107,9 @@ export class SettingsStore {
     return {
       ...(this.settings.publicBaseUrl ? { publicBaseUrl: this.settings.publicBaseUrl } : {}),
       guestRegistrationEnabled: this.settings.guestRegistrationEnabled === true,
+      historyRetention: this.settings.historyRetention ?? 'month',
+      guestAutoRemoveEnabled: this.settings.guestAutoRemoveEnabled === true,
+      guestInactivityHours: this.settings.guestInactivityHours ?? 24,
     };
   }
 
@@ -130,7 +146,13 @@ export class SettingsStore {
     return this.updatePublicSettings({ publicBaseUrl });
   }
 
-  async updatePublicSettings(input: { publicBaseUrl?: string | undefined; guestRegistrationEnabled?: boolean }): Promise<PublicSettings> {
+  async updatePublicSettings(input: {
+    publicBaseUrl?: string | undefined;
+    guestRegistrationEnabled?: boolean;
+    historyRetention?: HistoryRetention;
+    guestAutoRemoveEnabled?: boolean;
+    guestInactivityHours?: number;
+  }): Promise<PublicSettings> {
     const previous = cloneSettings(this.settings);
     this.settings = {
       ...this.settings,
@@ -138,6 +160,9 @@ export class SettingsStore {
         ? (input.publicBaseUrl ? { publicBaseUrl: input.publicBaseUrl } : { publicBaseUrl: undefined })
         : {}),
       ...(input.guestRegistrationEnabled === undefined ? {} : { guestRegistrationEnabled: input.guestRegistrationEnabled }),
+      ...(input.historyRetention === undefined ? {} : { historyRetention: input.historyRetention }),
+      ...(input.guestAutoRemoveEnabled === undefined ? {} : { guestAutoRemoveEnabled: input.guestAutoRemoveEnabled }),
+      ...(input.guestInactivityHours === undefined ? {} : { guestInactivityHours: input.guestInactivityHours }),
     };
     try {
       await this.persist();

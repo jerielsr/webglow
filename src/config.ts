@@ -9,6 +9,8 @@ export interface WebglowConfig {
   dataFile: string;
   settingsFile: string;
   scenesFile: string;
+  historyFile: string;
+  mediaDirectory: string;
   staticRoot: string;
   apiToken?: string;
   passwordResetToken?: string;
@@ -39,6 +41,8 @@ export function getConfig(environment: NodeJS.ProcessEnv = process.env): Webglow
     dataFile: resolve(dataDirectory, 'lights.json'),
     settingsFile: resolve(dataDirectory, 'settings.json'),
     scenesFile: resolve(dataDirectory, 'scenes.json'),
+    historyFile: resolve(dataDirectory, 'history.json'),
+    mediaDirectory: resolve(dataDirectory, 'media'),
     staticRoot: DEFAULT_STATIC_ROOT,
     apiToken: configuredToken || undefined,
     passwordResetToken: passwordResetToken || undefined,

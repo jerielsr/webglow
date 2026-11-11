@@ -1,4 +1,4 @@
-const CACHE_NAME = "webglow-console-v1";
+const CACHE_NAME = "webglow-console-v2";
 const APP_ASSETS = [
   "/",
   "/app.html",
@@ -24,7 +24,7 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
   const path = new URL(request.url).pathname;
-  if (path.startsWith("/api/") || path.startsWith("/display/")) return;
+  if (path.startsWith("/api/") || path.startsWith("/display/") || path.startsWith("/media/")) return;
   event.respondWith(
     fetch(request)
       .then((response) => {

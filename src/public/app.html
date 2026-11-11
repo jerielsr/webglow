@@ -37,8 +37,14 @@
           <div class="command-actions">
             <button id="clear-programmer" class="console-button subtle-button" type="button">Clear</button>
             <button id="all-fixtures" class="console-button subtle-button" type="button">All fixtures</button>
+            <button id="toggle-command-history" class="console-button subtle-button" type="button" aria-expanded="false">History</button>
           </div>
         </div>
+        <section id="command-history-panel" class="console-panel command-history-panel" hidden>
+          <div class="console-panel-heading"><div><p>Command line</p><h1>Recent history</h1></div><span id="history-summary" class="console-count">Loading…</span></div>
+          <div id="command-history-list" class="command-history-list"></div>
+          <button id="history-load-older" class="console-button subtle-button" type="button" hidden>Load older history</button>
+        </section>
 
         <div class="console-grid">
           <section class="console-panel fixture-sheet" aria-labelledby="fixture-sheet-title">
@@ -116,6 +122,8 @@
               <div class="cue-record">
                 <label>Cue <input id="cue-number" inputmode="decimal" value="1" aria-label="Cue number" /></label>
                 <label>Name <input id="cue-name" placeholder="Warm welcome" aria-label="Cue name" /></label>
+                <label>Targets <select id="cue-target-mode"><option value="selected">Selected</option><option value="all">All current &amp; future</option></select></label>
+                <label class="cue-scale-toggle"><input id="cue-scale-effect" type="checkbox" /><span>Auto-scale effect over current fixture count</span></label>
                 <button id="record-cue" class="console-button record-button" type="button">Record</button>
               </div>
             </div>
@@ -201,6 +209,31 @@
               <div><button class="console-button go-button" type="submit">Save guest access</button><button id="copy-guest-url" class="console-button subtle-button" type="button">Copy join URL</button></div>
             </form>
             <div id="guest-share" class="guest-share" hidden><code id="guest-join-url"></code><img id="guest-qr" alt="QR code for the guest registration page" /></div>
+          </section>
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Command history</p><h1>Retention &amp; storage</h1></div></div>
+            <p class="console-copy">History stores cue, fixture, guest, and live output commands. Changing retention permanently removes entries older than the selected window.</p>
+            <form id="history-retention-form" class="console-form">
+              <label>Keep history<select id="history-retention"><option value="all">All history</option><option value="year">Last year</option><option value="month">Last month</option><option value="week">Last week</option><option value="day">Last day</option></select></label>
+              <p id="history-storage" class="storage-note">Loading history storage…</p>
+              <button class="console-button go-button" type="submit">Save retention</button>
+            </form>
+          </section>
+          <section class="console-panel">
+            <div class="console-panel-heading"><div><p>Audience management</p><h1>Inactive guest cleanup</h1></div></div>
+            <p class="console-copy">Optionally remove QR-created guest fixtures after their display has disconnected and stayed away for the selected period.</p>
+            <form id="guest-expiry-form" class="console-form">
+              <label class="guest-toggle"><input id="guest-auto-remove-enabled" type="checkbox" /><span>Automatically remove inactive guests</span></label>
+              <label>Inactive for<select id="guest-inactivity-hours"><option value="1">1 hour</option><option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label>
+              <button class="console-button go-button" type="submit">Save cleanup policy</button>
+            </form>
+          </section>
+          <section class="console-panel media-library-panel">
+            <div class="console-panel-heading"><div><p>Looks &amp; media</p><h1>Display media library</h1></div><span id="media-storage" class="console-count">0 B</span></div>
+            <p class="console-copy">Upload JPEG, PNG, WebP, GIF, MP4, or WebM (up to 40 MB). Files are stored once on the server and streamed to displays locally; video plays muted and loops.</p>
+            <form id="media-upload-form" class="console-form media-upload-form"><label>Upload image, GIF, or silent video<input id="media-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required /></label><button class="console-button go-button" type="submit">Upload media</button></form>
+            <div class="media-apply-toolbar"><label>Target<select id="media-target-mode"><option value="selected">Selected browser fixtures</option><option value="all">All current browser fixtures</option></select></label><button id="apply-media" class="console-button go-button" type="button" disabled>Show on fixtures</button><button id="clear-media" class="console-button subtle-button" type="button">Clear media</button></div>
+            <div id="media-library" class="media-library"></div>
           </section>
         </div>
       </section>

@@ -21,6 +21,7 @@ export interface WledFixtureConfig {
 export interface GuestFixtureConfig {
   registeredAt: string;
   displayName: string;
+  lastSeenAt?: string;
 }
 
 export interface LightState {
@@ -39,6 +40,10 @@ export interface LightState {
   phaseOffset: number;
   /** Unix epoch milliseconds used to keep independently rendered patterns in step. */
   patternStartedAt: number;
+  /** Optional browser media asset served by this WebGlow instance. */
+  mediaUrl?: string;
+  mediaKind?: 'image' | 'video';
+  mediaStartedAt?: number;
 }
 
 export interface LightResource {
@@ -72,6 +77,8 @@ export interface LightPatch {
   fadeMs?: number;
   phaseOffset?: number;
   expectedRevision?: number;
+  mediaUrl?: string | null;
+  mediaKind?: 'image' | 'video' | null;
 }
 
 /** A saved console cue. The state is applied to its targets when the cue is run. */
@@ -80,6 +87,8 @@ export interface SceneResource {
   name: string;
   ids: 'all' | string[];
   state: LightPatch;
+  /** Recalculate phase spacing against the fixtures present at GO time. */
+  scaleEffect?: boolean;
   revision: number;
   createdAt: string;
   updatedAt: string;
@@ -90,6 +99,7 @@ export interface CreateSceneInput {
   name?: string;
   ids: 'all' | string[];
   state: LightPatch;
+  scaleEffect?: boolean;
 }
 
 export const DEFAULT_LIGHT_STATE: Omit<LightState, 'patternStartedAt'> = {
