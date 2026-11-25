@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -130,6 +130,59 @@ test('creates a light and updates its rendered state', async () => {
   });
 });
 
+test('programmer visual layers validate and persist above media', async () => {
+  await withApp(async (app) => {
+    await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'layered-display', name: 'Layered display' } });
+    const layers = [
+      { id: 'snow-1', pattern: 'snowflakes', color: '#EAF8FF', opacity: 72, density: 36, size: 52, speed: 40 },
+      { id: 'orbit-1', pattern: 'orbit', color: '#FF8AC7', opacity: 48, density: 18, size: 76, speed: 64 },
+    ];
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/lights/layered-display',
+      payload: {
+        on: true,
+        color: '#1833AA',
+        pattern: 'breathe',
+        mediaUrl: '/media/00000000-0000-4000-8000-000000000001.gif',
+        mediaKind: 'image',
+        mediaOpacity: 55,
+        layers,
+      },
+    });
+    assert.equal(updated.statusCode, 200);
+    assert.equal(updated.json().state.pattern, 'breathe');
+    assert.equal(updated.json().state.mediaOpacity, 55);
+    assert.equal(updated.json().state.mediaUrl, '/media/00000000-0000-4000-8000-000000000001.gif');
+    assert.deepEqual(updated.json().state.layers, layers);
+
+    const invalid = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/lights/layered-display',
+      payload: { layers: [{ id: 'bad', pattern: 'laser', color: '#ffffff', opacity: 100, density: 12, size: 48, speed: 35 }] },
+    });
+    assert.equal(invalid.statusCode, 400);
+  });
+});
+
+test('fixture numbers can change without changing stable fixture IDs', async () => {
+  await withApp(async (app) => {
+    const first = await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'fixture-a' } });
+    const second = await app.inject({ method: 'POST', url: '/api/v1/lights', payload: { id: 'fixture-b' } });
+    assert.equal(first.json().light.fixtureNumber, 1);
+    assert.equal(second.json().light.fixtureNumber, 2);
+
+    const changed = await app.inject({ method: 'PATCH', url: '/api/v1/lights/fixture-a', payload: { fixtureNumber: 17 } });
+    assert.equal(changed.statusCode, 200);
+    assert.equal(changed.json().id, 'fixture-a');
+    assert.equal(changed.json().fixtureNumber, 17);
+
+    const conflict = await app.inject({ method: 'PATCH', url: '/api/v1/lights/fixture-a', payload: { fixtureNumber: 2 } });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/v1/lights/fixture-a' })).json().id, 'fixture-a');
+  });
+});
+
 test('serves the portal and requires lights to be created before they can be fetched', async () => {
   await withApp(async (app) => {
     const portal = await app.inject({ method: 'GET', url: '/' });
@@ -144,6 +197,18 @@ test('serves the portal and requires lights to be created before they can be fet
     const monitor = await app.inject({ method: 'GET', url: '/monitor' });
     assert.equal(monitor.statusCode, 200);
     assert.match(monitor.body, /Live service health/);
+
+    const playback = await app.inject({ method: 'GET', url: '/playback' });
+    assert.equal(playback.statusCode, 200);
+    assert.match(playback.body, /id="view-playback"/);
+    const timelinesAlias = await app.inject({ method: 'GET', url: '/timelines' });
+    assert.equal(timelinesAlias.statusCode, 200);
+    assert.match(timelinesAlias.body, /id="view-playback"/);
+
+    const join = await app.inject({ method: 'GET', url: '/join' });
+    assert.equal(join.statusCode, 200);
+    assert.match(join.body, /Please enter your name/);
+    assert.doesNotMatch(join.body, /API token/);
 
     const settings = await app.inject({ method: 'GET', url: '/settings' });
     assert.equal(settings.statusCode, 200);
@@ -167,7 +232,9 @@ test('serves the portal and requires lights to be created before they can be fet
     const page = await app.inject({ method: 'GET', url: '/display/tablet' });
     assert.equal(page.statusCode, 200);
     assert.match(page.headers['content-type'], /^text\/html/);
-    assert.match(page.body, /WebGlow display/);
+    assert.match(page.body, /Your WebGlow light/);
+    assert.match(page.body, /Created by Jeriel/);
+    assert.match(page.body, /Psalm 18:28 \(NIV\)/);
   });
 });
 
@@ -224,7 +291,7 @@ test('protects control routes when WEBGLOW_API_TOKEN is configured', async () =>
 
 test('uses a portal session for protected management and persists display settings', async () => {
   await withApp(
-    async (app) => {
+    async (app, directory) => {
       const beforeSetup = await app.inject({ method: 'GET', url: '/api/v1/auth/status' });
       assert.equal(beforeSetup.json().setupRequired, true);
 
@@ -268,6 +335,32 @@ test('uses a portal session for protected management and persists display settin
       assert.equal(serverSettings.statusCode, 200);
       assert.equal(serverSettings.json().server.port, 1828);
 
+      const tunnelSettings = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/tunnel',
+        headers: { cookie: sessionCookie },
+        payload: { token: 'test-cloudflare-connector-token-secret', hostname: 'lights.example.test', autoStart: true },
+      });
+      assert.equal(tunnelSettings.statusCode, 200);
+      assert.equal(tunnelSettings.json().configured, true);
+      assert.equal(tunnelSettings.json().hostname, 'lights.example.test');
+      assert.equal(tunnelSettings.json().autoStart, true);
+      assert.equal(JSON.stringify(tunnelSettings.json()).includes('test-cloudflare-connector-token-secret'), false);
+      assert.equal((await stat(join(directory, 'settings.json'))).mode & 0o777, 0o600);
+
+      const tunnelStatus = await app.inject({ method: 'GET', url: '/api/v1/tunnel', headers: { cookie: sessionCookie } });
+      assert.equal(tunnelStatus.statusCode, 200);
+      assert.equal(tunnelStatus.json().configured, true);
+      assert.equal(JSON.stringify(tunnelStatus.json()).includes('test-cloudflare-connector-token-secret'), false);
+
+      const invalidTunnelHostname = await app.inject({
+        method: 'PATCH',
+        url: '/api/v1/tunnel',
+        headers: { cookie: sessionCookie },
+        payload: { hostname: 'https://lights.example.test' },
+      });
+      assert.equal(invalidTunnelHostname.statusCode, 400);
+
       const metrics = await app.inject({
         method: 'GET',
         url: '/api/v1/metrics',
@@ -298,23 +391,29 @@ test('registers guest display lights and exposes the share QR and resource summa
     assert.equal(settings.json().guestRegistrationEnabled, true);
 
     const status = await app.inject({ method: 'GET', url: '/api/v1/guest-registration' });
-    assert.deepEqual(status.json(), { enabled: true });
+    assert.deepEqual(status.json(), { enabled: true, seatSections: ['Left', 'Center', 'Right'] });
 
     const registered = await app.inject({
       method: 'POST',
       url: '/api/v1/guest-registration',
-      payload: { name: 'Guest One' },
+      payload: { name: 'Guest One', keepAwake: true },
     });
     assert.equal(registered.statusCode, 201);
     assert.match(registered.json().light.id, /^guest-/);
-    assert.equal(registered.json().light.name, "Guest One's light");
+    assert.equal(registered.json().light.name, 'Guest One');
     assert.equal(registered.json().light.guest.displayName, 'Guest One');
+    assert.equal(registered.json().light.guest.keepAwake, true);
     assert.equal(registered.json().displayPath, '/display/' + registered.json().light.id);
 
     const qr = await app.inject({ method: 'GET', url: '/api/v1/guest-registration/qr' });
     assert.equal(qr.statusCode, 200);
     assert.match(qr.headers['content-type'], /^image\/svg\+xml/);
     assert.match(qr.body, /<svg/);
+
+    const applicationQr = await app.inject({ method: 'GET', url: '/api/v1/application-url/qr' });
+    assert.equal(applicationQr.statusCode, 200);
+    assert.match(applicationQr.headers['content-type'], /^image\/svg\+xml/);
+    assert.match(applicationQr.body, /<svg/);
 
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address();
@@ -334,7 +433,9 @@ test('registers guest display lights and exposes the share QR and resource summa
     assert.equal(summary.json().guests[0].name, 'Guest One');
     assert.ok(summary.json().resources.persistedStateBytes > 0);
     assert.ok(summary.json().resources.outboundWebsocketBytes > 0);
+    const socketClosed = new Promise((resolve) => socket.addEventListener('close', resolve, { once: true }));
     socket.close();
+    await socketClosed;
   });
 });
 
@@ -349,12 +450,43 @@ test('updates groups and creates phased chases', async () => {
       payload: {
         ids: 'all',
         state: { on: true, color: '#1ac', brightness: 68, pattern: 'twinkle', speed: 32, fadeMs: 500 },
+        direction: 'reverse',
       },
     });
     assert.equal(batch.statusCode, 200);
     assert.equal(batch.json().count, 2);
     assert.equal(batch.json().lights[0].state.color, '#11AACC');
     assert.equal(batch.json().lights[1].state.fadeMs, 500);
+    assert.deepEqual(Object.fromEntries(batch.json().lights.map((light) => [light.id, light.state.phaseOffset])), {
+      right: 0,
+      left: 0.5,
+    });
+
+    for (const pattern of ['breathe', 'pulse', 'strobe', 'rainbow', 'ramp-up', 'ramp-down', 'multi-chase']) {
+      const effect = await app.inject({
+        method: 'POST',
+        url: '/api/v1/lights/batch',
+        payload: { ids: 'all', state: { pattern, speed: 48, ...(pattern === 'multi-chase' ? { colors: ['#ff0000', '#00ff00', '#0000ff'], colorTransition: 'ramp', colorTransitions: ['ramp-up', 'snap', 'ramp-down'], colorStepMs: 1250 } : {}) }, direction: 'reverse' },
+      });
+      assert.equal(effect.statusCode, 200);
+      assert.deepEqual(Object.fromEntries(effect.json().lights.map((light) => [light.id, light.state.phaseOffset])), {
+        right: 0,
+        left: 0.5,
+      });
+      if (pattern === 'multi-chase') {
+        assert.deepEqual(effect.json().lights[0].state.colors, ['#FF0000', '#00FF00', '#0000FF']);
+        assert.equal(effect.json().lights[0].state.colorTransition, 'ramp-up');
+        assert.deepEqual(effect.json().lights[0].state.colorTransitions, ['ramp-up', 'snap', 'ramp-down']);
+        assert.equal(effect.json().lights[0].state.colorStepMs, 1250);
+      }
+    }
+
+    const invalidChaseSteps = await app.inject({
+      method: 'POST',
+      url: '/api/v1/lights/batch',
+      payload: { ids: 'all', state: { pattern: 'multi-chase', colors: ['#ff0000', '#00ff00', '#0000ff'], colorTransitions: ['snap', 'ramp-up'] } },
+    });
+    assert.equal(invalidChaseSteps.statusCode, 400);
 
     const chase = await app.inject({
       method: 'POST',
@@ -368,6 +500,43 @@ test('updates groups and creates phased chases', async () => {
       [0, 0.5],
     );
     assert.ok(chase.json().lights.every((light) => light.state.pattern === 'chase' && light.state.on));
+  });
+});
+
+test('directional effects follow the operator-defined guest section order', async () => {
+  await withApp(async (app) => {
+    await app.inject({ method: 'PATCH', url: '/api/v1/settings', payload: { guestRegistrationEnabled: true, seatSections: ['Balcony', 'Center', 'Floor'] } });
+    for (const section of ['Floor', 'Balcony', 'Center']) {
+      const registered = await app.inject({ method: 'POST', url: '/api/v1/guest-registration', payload: { name: section, section } });
+      assert.equal(registered.statusCode, 201);
+    }
+    const forward = await app.inject({ method: 'POST', url: '/api/v1/lights/batch', payload: { ids: 'all', state: { on: true, pattern: 'chase', speed: 45 }, direction: 'front-to-back' } });
+    assert.equal(forward.statusCode, 200);
+    assert.deepEqual(forward.json().lights.map((light) => light.guest.section), ['Balcony', 'Center', 'Floor']);
+    const reverse = await app.inject({ method: 'POST', url: '/api/v1/lights/batch', payload: { ids: 'all', state: { pattern: 'chase', speed: 45 }, direction: 'back-to-front' } });
+    assert.equal(reverse.statusCode, 200);
+    assert.deepEqual(reverse.json().lights.map((light) => light.guest.section), ['Floor', 'Center', 'Balcony']);
+  });
+});
+
+test('virtual subsections distribute each guest section into finer effect groups', async () => {
+  await withApp(async (app) => {
+    const settings = await app.inject({ method: 'PATCH', url: '/api/v1/settings', payload: {
+      guestRegistrationEnabled: true,
+      seatSections: ['Center'],
+      virtualSubsectionsEnabled: true,
+      virtualSubsectionsCount: 3,
+    } });
+    assert.equal(settings.statusCode, 200);
+    assert.equal(settings.json().virtualSubsectionsEnabled, true);
+    assert.equal(settings.json().virtualSubsectionsCount, 3);
+    for (const name of ['Guest 1', 'Guest 2', 'Guest 3', 'Guest 4', 'Guest 5', 'Guest 6']) {
+      const registered = await app.inject({ method: 'POST', url: '/api/v1/guest-registration', payload: { name, section: 'Center' } });
+      assert.equal(registered.statusCode, 201);
+    }
+    const output = await app.inject({ method: 'POST', url: '/api/v1/lights/batch', payload: { ids: 'all', state: { pattern: 'chase', speed: 45 }, direction: 'forward' } });
+    assert.equal(output.statusCode, 200);
+    assert.deepEqual(output.json().lights.map((light) => light.guest.displayName), ['Guest 1', 'Guest 4', 'Guest 2', 'Guest 5', 'Guest 3', 'Guest 6']);
   });
 });
 

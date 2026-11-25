@@ -6,9 +6,10 @@
   const RECONNECT_INITIAL_DELAY_MS = 1_000;
   const RECONNECT_MAX_DELAY_MS = 30_000;
   const SOCKET_CONNECT_TIMEOUT_MS = 8_000;
-  const MIN_EFFECT_HZ = 0.5;
+  const MIN_EFFECT_HZ = 0.05;
   const MAX_EFFECT_HZ = 3;
-  const ALLOWED_PATTERNS = new Set(["solid", "breathe", "pulse", "strobe", "rainbow", "chase", "twinkle"]);
+  const ALLOWED_PATTERNS = new Set(["solid", "breathe", "pulse", "strobe", "rainbow", "chase", "twinkle", "ramp-up", "ramp-down", "multi-chase"]);
+  const VISUAL_LAYER_PATTERNS = new Set(["snowflakes", "squares", "orbit"]);
 
   const canvas = document.querySelector("#light-canvas");
   const context = canvas.getContext("2d", { alpha: false });
@@ -17,13 +18,11 @@
   const overlayClose = document.querySelector("#overlay-close");
   const statusElement = document.querySelector("#connection-status");
   const lightNameElement = document.querySelector("#light-name");
-  const lightIdElement = document.querySelector("#light-id");
   const connectionDetailElement = document.querySelector("#connection-detail");
-  const stateDetailElement = document.querySelector("#state-detail");
-  const patternDetailElement = document.querySelector("#pattern-detail");
-  const updatedDetailElement = document.querySelector("#updated-detail");
   const fullscreenButton = document.querySelector("#fullscreen-button");
-  const wakeLockButton = document.querySelector("#wake-lock-button");
+  const leaveLightButton = document.querySelector("#leave-light-button");
+  const leaveLightMessage = document.querySelector("#leave-light-message");
+  const wakeLockStatus = document.querySelector("#wake-lock-status");
 
   const defaultState = Object.freeze({
     on: false,
@@ -33,12 +32,15 @@
     speed: 0,
     fadeMs: 0,
     phaseOffset: 0,
+    mediaOpacity: 100,
+    layers: [],
   });
 
   const lightId = getLightIdFromPath();
   const initialLight = {
     id: lightId || "",
     name: lightId ? `Light ${lightId}` : "No light selected",
+    isGuest: false,
     state: { ...defaultState },
     revision: null,
     updatedAt: null,
@@ -57,7 +59,16 @@
   let restPollTimer = null;
   let restFetchInFlight = false;
   let wakeLock = null;
-  let wakeLockRequested = false;
+  let wakeLockRequestPending = false;
+  let wakeFallbackVideo = null;
+  let wakeFallbackStream = null;
+  let wakeFallbackCanvas = null;
+  let wakeFallbackTimer = null;
+  let wakeFallbackActive = false;
+  // Displays request the browser wake lock automatically. If that is blocked,
+  // try a muted, nearly invisible canvas-video fallback and retry on visibility
+  // changes and user interaction; browser and OS policies can still override it.
+  let wakeLockRequested = true;
   let canvasWidth = 0;
   let canvasHeight = 0;
   let devicePixelRatio = 1;
@@ -132,6 +143,22 @@
     return candidate;
   }
 
+  function normaliseColors(value, fallback) {
+    if (!Array.isArray(value)) return fallback;
+    const colors = value.slice(0, 8).map((color) => normaliseColor(color, "")).filter(Boolean);
+    return colors.length >= 2 ? colors : fallback;
+  }
+
+  function normaliseColorTransition(value, fallback = "snap") {
+    if (value === "ramp") return "ramp-up";
+    return ["snap", "fade", "ramp-up", "ramp-down"].includes(value) ? value : fallback;
+  }
+
+  function normaliseColorTransitions(value, colorCount, fallback) {
+    if (colorCount < 2) return [];
+    return Array.from({ length: colorCount }, (_, index) => normaliseColorTransition(value?.[index], fallback));
+  }
+
   function normaliseResource(resource) {
     const rawState = resource && typeof resource.state === "object" && resource.state ? resource.state : {};
     const updatedAt = typeof resource?.updatedAt === "string" ? resource.updatedAt : null;
@@ -141,10 +168,15 @@
     return {
       id: resource?.id === undefined || resource?.id === null ? lightId : String(resource.id),
       name: typeof resource?.name === "string" && resource.name.trim() ? resource.name.trim() : `Light ${lightId}`,
+      isGuest: Boolean(resource?.guest),
       state: {
         on: booleanValue(rawState.on, defaultState.on),
         brightness: clamp(rawState.brightness, 0, 100, defaultState.brightness),
         color: normaliseColor(rawState.color, defaultState.color),
+        colors: normaliseColors(rawState.colors, []),
+        colorTransition: normaliseColorTransition(rawState.colorTransition),
+        colorTransitions: normaliseColorTransitions(rawState.colorTransitions, Array.isArray(rawState.colors) ? Math.min(8, rawState.colors.length) : 0, normaliseColorTransition(rawState.colorTransition)),
+        colorStepMs: clamp(rawState.colorStepMs, 100, 60000, 750),
         pattern: normalisePattern(rawState.pattern),
         speed: clamp(rawState.speed, 0, 100, defaultState.speed),
         fadeMs: clamp(rawState.fadeMs, 0, 60000, defaultState.fadeMs),
@@ -152,6 +184,8 @@
         mediaUrl: typeof rawState.mediaUrl === "string" ? rawState.mediaUrl : "",
         mediaKind: rawState.mediaKind === "video" ? "video" : rawState.mediaUrl ? "image" : "",
         mediaStartedAt: Number(rawState.mediaStartedAt) || 0,
+        mediaOpacity: clamp(rawState.mediaOpacity, 0, 100, 100),
+        layers: normaliseLayers(rawState.layers),
         // Optional: newer servers provide this to keep many displays in phase.
         patternStartedAt: Number.isFinite(patternStartedAt) && patternStartedAt > 0 ? patternStartedAt : 0,
       },
@@ -159,6 +193,19 @@
       updatedAt,
       updatedAtMs: Number.isFinite(parsedUpdatedAt) ? parsedUpdatedAt : 0,
     };
+  }
+
+  function normaliseLayers(value) {
+    if (!Array.isArray(value)) return [];
+    return value.slice(0, 8).filter((layer) => layer && typeof layer === "object" && VISUAL_LAYER_PATTERNS.has(layer.pattern)).map((layer, index) => ({
+      id: typeof layer.id === "string" ? layer.id : `layer-${index + 1}`,
+      pattern: layer.pattern,
+      color: normaliseColor(layer.color, "#EAF8FF"),
+      opacity: clamp(layer.opacity, 0, 100, 68),
+      density: Math.round(clamp(layer.density, 1, 120, 30)),
+      size: clamp(layer.size, 8, 100, 48),
+      speed: clamp(layer.speed, 0, 100, 35),
+    }));
   }
 
   function isNewerResource(nextLight) {
@@ -196,6 +243,10 @@
       light.state.pattern !== nextLight.state.pattern ||
       light.updatedAt !== nextLight.updatedAt ||
       light.state.speed !== nextLight.state.speed ||
+      light.state.colorTransition !== nextLight.state.colorTransition ||
+      JSON.stringify(light.state.colorTransitions) !== JSON.stringify(nextLight.state.colorTransitions) ||
+      light.state.colorStepMs !== nextLight.state.colorStepMs ||
+      JSON.stringify(light.state.layers) !== JSON.stringify(nextLight.state.layers) ||
       light.state.patternStartedAt !== nextLight.state.patternStartedAt;
     const mediaChanged = light.state.mediaUrl !== nextLight.state.mediaUrl || light.state.mediaKind !== nextLight.state.mediaKind || light.state.mediaStartedAt !== nextLight.state.mediaStartedAt;
 
@@ -203,7 +254,8 @@
       light.state.on !== nextLight.state.on ||
       light.state.brightness !== nextLight.state.brightness ||
       light.state.color !== nextLight.state.color;
-    if (visualChanged && nextLight.state.fadeMs > 0) {
+    const paletteChanged = JSON.stringify(light.state.colors) !== JSON.stringify(nextLight.state.colors);
+    if ((visualChanged || paletteChanged) && nextLight.state.fadeMs > 0) {
       transition = {
         from: {
           on: light.state.on,
@@ -213,7 +265,7 @@
         startedAt: Date.now(),
         duration: nextLight.state.fadeMs,
       };
-    } else if (visualChanged) {
+    } else if (visualChanged || paletteChanged) {
       transition = null;
     }
 
@@ -276,7 +328,6 @@
     const scale = Math.max(canvasWidth / width, canvasHeight / height);
     const drawWidth = width * scale;
     const drawHeight = height * scale;
-    fillBlack();
     context.globalAlpha = Math.max(0, Math.min(1, brightness / 100));
     context.drawImage(element, (canvasWidth - drawWidth) / 2, (canvasHeight - drawHeight) / 2, drawWidth, drawHeight);
     context.globalAlpha = 1;
@@ -284,30 +335,9 @@
   }
 
   function updateDetails() {
-    const state = light.state;
-    const prettyPattern = state.pattern.charAt(0).toUpperCase() + state.pattern.slice(1);
-    const roundedBrightness = Math.round(state.brightness);
-    const roundedSpeed = Math.round(state.speed);
-
     document.title = `${light.name} – WebGlow`;
     lightNameElement.textContent = light.name;
-    lightIdElement.textContent = light.id ? `ID: ${light.id}` : "No light ID in this address";
-    stateDetailElement.textContent = state.on ? `On · ${roundedBrightness}%` : "Off";
-    patternDetailElement.textContent = `${prettyPattern} · speed ${roundedSpeed}%`;
-    updatedDetailElement.textContent = formatTimestamp(light.updatedAt);
-  }
-
-  function formatTimestamp(value) {
-    if (!value) {
-      return "Waiting for state…";
-    }
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return "Received";
-    }
-
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    leaveLightButton.hidden = !light.isGuest;
   }
 
   function setConnection(state, message) {
@@ -338,7 +368,7 @@
       });
 
       if (response.status === 404) {
-        setConnection("offline", "This light has not been created. Use the WebGlow portal first.");
+        setConnection("offline", "Your light is not ready yet. Please ask your host for help.");
         setOverlayVisible(true);
         return;
       }
@@ -349,12 +379,11 @@
 
       applyResource(await response.json());
       if (!isSocketOpen()) {
-        setConnection("fallback", "Using REST fallback");
+        setConnection("fallback", "Connected");
       }
     } catch (error) {
       if (!isSocketOpen()) {
-        const detail = error instanceof Error ? error.message : "Unable to reach the light";
-        setConnection("offline", detail);
+        setConnection("offline", navigator.onLine === false ? "No internet connection. Check your Wi-Fi." : "Connection interrupted. Trying again…");
       }
     } finally {
       restFetchInFlight = false;
@@ -400,7 +429,7 @@
 
   function connectSocket() {
     if (!lightId) {
-      setConnection("error", "No light ID in this address");
+      setConnection("error", "This light link is incomplete. Please scan the host’s QR code again.");
       return;
     }
 
@@ -413,20 +442,19 @@
     }
 
     if (navigator.onLine === false) {
-      setConnection("offline", "Device is offline");
+      setConnection("offline", "No internet connection. Check your Wi-Fi.");
       startRestPolling();
       return;
     }
 
     clearReconnectTimer();
-    setConnection("connecting", "Connecting…");
+    setConnection("connecting", "Connecting to your light…");
 
     let nextSocket;
     try {
       nextSocket = new WebSocket(socketUrl());
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "WebSocket is unavailable";
-      setConnection("error", detail);
+    } catch {
+      setConnection("error", "Connection interrupted. Trying again…");
       startRestPolling();
       scheduleReconnect();
       return;
@@ -447,7 +475,7 @@
       clearSocketConnectTimer();
       reconnectAttempt = 0;
       stopRestPolling();
-      setConnection("live", "Live updates connected");
+      setConnection("live", "Connected to the show");
       void fetchLight();
     });
 
@@ -512,7 +540,7 @@
     const jitter = Math.round(Math.random() * 350);
     const delay = exponentialDelay + jitter;
     reconnectAttempt += 1;
-    setConnection("fallback", `Reconnecting in ${Math.ceil(delay / 1_000)}s (REST fallback active)`);
+    setConnection("fallback", "Reconnecting to the show…");
 
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;
@@ -548,8 +576,7 @@
     lastUpdatedAtMs = 0;
     effectStartedAtMs = Date.now();
     updateDetails();
-    stateDetailElement.textContent = "Deleted";
-    setConnection("offline", "This light was deleted in the WebGlow portal.");
+    setConnection("offline", "This light is no longer registered. Please ask your host for a new link.");
     setOverlayVisible(true);
   }
 
@@ -671,8 +698,8 @@
     context.fillRect(0, 0, canvasWidth, canvasHeight);
   }
 
-  function drawRainbow(baseHue, brightness, elapsedSeconds, frequency) {
-    const phase = (elapsedSeconds * frequency) % 1;
+  function drawRainbow(baseHue, brightness, phase) {
+    phase = ((phase % 1) + 1) % 1;
     const angle = phase * Math.PI * 2;
     const startX = canvasWidth / 2 + Math.cos(angle) * canvasWidth * 0.65;
     const startY = canvasHeight / 2 + Math.sin(angle) * canvasHeight * 0.65;
@@ -687,6 +714,82 @@
 
     context.fillStyle = gradient;
     context.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  function layerSeed(value) {
+    let seed = 0;
+    for (let index = 0; index < value.length; index += 1) seed = (seed * 31 + value.charCodeAt(index)) >>> 0;
+    return seed / 0xffffffff;
+  }
+
+  function drawVisualLayer(layer, elapsedSeconds, brightness) {
+    const alpha = Math.max(0, Math.min(1, layer.opacity / 100 * brightness / 100));
+    if (!alpha) return;
+    const frequency = speedToFrequency(layer.speed);
+    const color = layer.color;
+    const minDimension = Math.min(canvasWidth, canvasHeight);
+    context.save();
+    context.globalAlpha = alpha;
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = Math.max(1, devicePixelRatio * 1.15);
+
+    if (layer.pattern === "snowflakes") {
+      const sizeBase = minDimension * (layer.size / 100) * 0.024;
+      const fallRate = minDimension * (0.035 + frequency * 0.16);
+      for (let index = 0; index < layer.density; index += 1) {
+        const seed = layerSeed(layer.id + ":" + index);
+        const drift = layerSeed(layer.id + ":drift:" + index);
+        const x = ((seed * canvasWidth) + Math.sin(elapsedSeconds * 0.48 + drift * Math.PI * 2) * sizeBase * 3 + canvasWidth) % canvasWidth;
+        const y = ((drift * canvasHeight + elapsedSeconds * fallRate * (0.55 + seed)) % canvasHeight);
+        const radius = Math.max(1.6, sizeBase * (0.45 + seed * 0.55));
+        context.beginPath();
+        for (let arm = 0; arm < 6; arm += 1) {
+          const angle = arm * Math.PI / 3;
+          const dx = Math.cos(angle) * radius;
+          const dy = Math.sin(angle) * radius;
+          context.moveTo(x - dx, y - dy);
+          context.lineTo(x + dx, y + dy);
+        }
+        context.stroke();
+      }
+    } else if (layer.pattern === "squares") {
+      const columns = Math.max(2, Math.ceil(Math.sqrt(layer.density * canvasWidth / canvasHeight)));
+      const rows = Math.max(1, Math.ceil(layer.density / columns));
+      const cellWidth = canvasWidth / columns;
+      const cellHeight = canvasHeight / rows;
+      const side = Math.min(cellWidth, cellHeight) * (0.12 + layer.size / 100 * 0.48);
+      for (let index = 0; index < layer.density; index += 1) {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        const pulse = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(elapsedSeconds * frequency * Math.PI * 2 + index * 2.399));
+        context.globalAlpha = alpha * pulse;
+        const inset = side * (0.12 + 0.08 * Math.sin(elapsedSeconds * frequency + index));
+        context.strokeRect(column * cellWidth + (cellWidth - side) / 2 + inset, row * cellHeight + (cellHeight - side) / 2 + inset, Math.max(1, side - inset * 2), Math.max(1, side - inset * 2));
+      }
+    } else if (layer.pattern === "orbit") {
+      const centerX = canvasWidth / 2;
+      const centerY = canvasHeight / 2;
+      const maxRadius = minDimension * (layer.size / 100) * 0.46;
+      for (let ring = 1; ring <= 3; ring += 1) {
+        context.globalAlpha = alpha * (0.3 + ring * 0.12);
+        context.beginPath();
+        context.arc(centerX, centerY, maxRadius * ring / 3, 0, Math.PI * 2);
+        context.stroke();
+      }
+      const orbitCount = Math.min(layer.density, 80);
+      for (let index = 0; index < orbitCount; index += 1) {
+        const angle = elapsedSeconds * frequency * Math.PI * 2 + index * Math.PI * 2 / orbitCount;
+        const ring = (index % 3) + 1;
+        const radius = maxRadius * ring / 3;
+        const dot = Math.max(2, minDimension * layer.size / 100 * 0.014);
+        context.globalAlpha = alpha;
+        context.beginPath();
+        context.arc(centerX + Math.cos(angle) * radius, centerY + Math.sin(angle) * radius, dot, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
+    context.restore();
   }
 
   function render() {
@@ -715,41 +818,69 @@
       return;
     }
 
-    if (mediaElement && drawMedia(mediaElement, brightness)) {
-      window.requestAnimationFrame(render);
-      return;
-    }
-
     const elapsedSeconds = Math.max(0, (Date.now() - effectStartedAtMs) / 1_000);
     const frequency = speedToFrequency(state.speed);
+    // Every effect uses the fixture's assigned phase. This lets a shared cue
+    // travel across independent browser displays instead of making every
+    // phone breathe, strobe, or cycle colour in lockstep.
+    const phaseCycles = elapsedSeconds * frequency + state.phaseOffset;
+    if (state.pattern === "multi-chase" && state.colors.length > 1) {
+      const stagePosition = elapsedSeconds * 1000 / state.colorStepMs + state.phaseOffset * state.colors.length;
+      const stage = Math.floor(stagePosition);
+      const colorIndex = ((stage % state.colors.length) + state.colors.length) % state.colors.length;
+      rgb = colourToRgb(state.colors[colorIndex]);
+      const stepTransition = state.colorTransitions[colorIndex] || state.colorTransition;
+      if (stepTransition !== "snap") {
+        const nextColor = colourToRgb(state.colors[(colorIndex + 1) % state.colors.length]);
+        const progress = stagePosition - stage;
+        const eased = stepTransition === "fade"
+          ? progress * progress * (3 - 2 * progress)
+          : stepTransition === "ramp-up"
+            ? progress * progress
+            : stepTransition === "ramp-down"
+              ? 1 - (1 - progress) * (1 - progress)
+              : progress;
+        rgb = mixRgb(rgb, nextColor, eased);
+      }
+    }
     if (state.pattern === "breathe" || state.pattern === "pulse") {
-      const phase = elapsedSeconds * frequency * Math.PI * 2;
+      const phase = phaseCycles * Math.PI * 2;
       const floor = state.pattern === "breathe" ? 0.28 : 0.08;
       const envelope = floor + (1 - floor) * (0.5 - 0.5 * Math.cos(phase));
       brightness *= envelope;
     } else if (state.pattern === "strobe") {
-      const phase = (elapsedSeconds * frequency) % 1;
+      const phase = phaseCycles % 1;
       if (phase >= 0.34) {
         fillBlack();
-        window.requestAnimationFrame(render);
-        return;
+      } else {
+        context.fillStyle = rgbCss(scaleRgb(rgb, brightness));
+        context.fillRect(0, 0, canvasWidth, canvasHeight);
       }
     } else if (state.pattern === "rainbow") {
-      drawRainbow(rgbToHue(rgb), brightness, elapsedSeconds, frequency);
-      window.requestAnimationFrame(render);
-      return;
+      drawRainbow(rgbToHue(rgb), brightness, phaseCycles);
     } else if (state.pattern === "chase") {
-      const phase = (elapsedSeconds * frequency + state.phaseOffset) % 1;
+      const phase = phaseCycles % 1;
       const distance = Math.abs(phase - 0.5) * 2;
       brightness *= 0.08 + 0.92 * (1 - distance) ** 3;
     } else if (state.pattern === "twinkle") {
       const seed = Math.sin((elapsedSeconds * frequency + state.phaseOffset * 13.37) * 9.71);
       const sparkle = Math.max(0.12, seed > 0.72 ? 1 : 0.22 + ((seed + 1) / 2) * 0.26);
       brightness *= sparkle;
+    } else if (state.pattern === "ramp-up") {
+      brightness *= 0.08 + 0.92 * (((phaseCycles % 1) + 1) % 1);
+    } else if (state.pattern === "ramp-down") {
+      brightness *= 1 - 0.92 * (((phaseCycles % 1) + 1) % 1);
+    } else if (state.pattern === "multi-chase") {
+      const progress = ((phaseCycles % 1) + 1) % 1;
+      brightness *= 0.1 + 0.9 * Math.max(0, 1 - Math.abs(progress - 0.5) * 2);
     }
 
-    context.fillStyle = rgbCss(scaleRgb(rgb, brightness));
-    context.fillRect(0, 0, canvasWidth, canvasHeight);
+    if (state.pattern !== "strobe" && state.pattern !== "rainbow") {
+      context.fillStyle = rgbCss(scaleRgb(rgb, brightness));
+      context.fillRect(0, 0, canvasWidth, canvasHeight);
+    }
+    if (mediaElement) drawMedia(mediaElement, brightness * state.mediaOpacity / 100);
+    state.layers.forEach((layer) => drawVisualLayer(layer, elapsedSeconds, brightness));
     window.requestAnimationFrame(render);
   }
 
@@ -787,57 +918,137 @@
         await request.call(document.documentElement);
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : "Could not change fullscreen mode";
-      setConnection("error", detail);
+      setConnection("error", "Full screen is not available on this device.");
     } finally {
       updateFullscreenButton();
     }
   }
 
-  function updateWakeLockButton() {
-    const active = Boolean(wakeLock && !wakeLock.released);
-    wakeLockButton.setAttribute("aria-pressed", String(active));
-    wakeLockButton.textContent = active ? "Screen awake" : "Keep screen awake";
+  function updateWakeLockStatus() {
+    const active = Boolean((wakeLock && !wakeLock.released) || wakeFallbackActive);
+    if (wakeLockStatus) wakeLockStatus.textContent = active
+      ? "Your screen is being kept awake automatically."
+      : "WebGlow is asking your device to keep the screen awake. Your device settings may override this request.";
   }
 
-  async function requestWakeLock() {
-    if (!("wakeLock" in navigator)) {
-      setConnection("error", "Wake Lock is not supported by this browser");
-      return;
-    }
-
-    try {
-      wakeLockRequested = true;
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeLock.addEventListener("release", () => {
-        wakeLock = null;
-        updateWakeLockButton();
+  async function startVideoWakeFallback() {
+    if (!HTMLCanvasElement.prototype.captureStream) return false;
+    if (!wakeFallbackVideo) {
+      wakeFallbackCanvas = document.createElement("canvas");
+      wakeFallbackCanvas.width = 2;
+      wakeFallbackCanvas.height = 2;
+      const stream = wakeFallbackCanvas.captureStream(1);
+      if (!stream) return false;
+      wakeFallbackStream = stream;
+      wakeFallbackVideo = document.createElement("video");
+      wakeFallbackVideo.muted = true;
+      wakeFallbackVideo.autoplay = true;
+      wakeFallbackVideo.playsInline = true;
+      wakeFallbackVideo.setAttribute("playsinline", "");
+      wakeFallbackVideo.setAttribute("aria-hidden", "true");
+      wakeFallbackVideo.tabIndex = -1;
+      wakeFallbackVideo.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:.001;pointer-events:none;z-index:-1";
+      wakeFallbackVideo.srcObject = stream;
+      wakeFallbackVideo.addEventListener("playing", () => {
+        wakeFallbackActive = true;
+        updateWakeLockStatus();
       });
-      updateWakeLockButton();
-    } catch (error) {
-      wakeLockRequested = false;
-      const detail = error instanceof Error ? error.message : "Could not keep the screen awake";
-      setConnection("error", detail);
-      updateWakeLockButton();
+      wakeFallbackVideo.addEventListener("pause", () => {
+        wakeFallbackActive = false;
+        updateWakeLockStatus();
+      });
+      document.body.append(wakeFallbackVideo);
+      let frame = 0;
+      const context = wakeFallbackCanvas.getContext("2d", { alpha: false });
+      wakeFallbackTimer = window.setInterval(() => {
+        frame = (frame + 1) % 2;
+        context.fillStyle = frame ? "#010101" : "#000000";
+        context.fillRect(0, 0, 2, 2);
+      }, 1000);
+    }
+    try {
+      await wakeFallbackVideo.play();
+      wakeFallbackActive = !wakeFallbackVideo.paused;
+      updateWakeLockStatus();
+      return wakeFallbackActive;
+    } catch {
+      wakeFallbackActive = false;
+      updateWakeLockStatus();
+      return false;
     }
   }
 
-  async function toggleWakeLock() {
-    if (wakeLock && !wakeLock.released) {
-      wakeLockRequested = false;
-      await wakeLock.release();
-      wakeLock = null;
-      updateWakeLockButton();
-      return;
+  async function stopVideoWakeFallback() {
+    if (wakeFallbackTimer) window.clearInterval(wakeFallbackTimer);
+    wakeFallbackTimer = null;
+    wakeFallbackActive = false;
+    if (wakeFallbackVideo) {
+      wakeFallbackVideo.pause();
+      wakeFallbackVideo.srcObject = null;
+      wakeFallbackVideo.remove();
+      wakeFallbackVideo = null;
     }
+    wakeFallbackStream?.getTracks().forEach((track) => track.stop());
+    wakeFallbackStream = null;
+    wakeFallbackCanvas = null;
+    updateWakeLockStatus();
+  }
 
-    await requestWakeLock();
+  async function requestWakeLock({ quiet = false } = {}) {
+    wakeLockRequested = true;
+    if (wakeLockRequestPending) return Boolean((wakeLock && !wakeLock.released) || wakeFallbackActive);
+    wakeLockRequestPending = true;
+    try {
+      if ("wakeLock" in navigator) {
+        try {
+          wakeLock = await navigator.wakeLock.request("screen");
+          wakeLock.addEventListener("release", () => {
+            wakeLock = null;
+            updateWakeLockStatus();
+          });
+          updateWakeLockStatus();
+          return true;
+        } catch {}
+      }
+      const fallbackStarted = await startVideoWakeFallback();
+      if (!fallbackStarted && wakeLockStatus) wakeLockStatus.textContent = "WebGlow cannot keep this screen awake automatically. Your device settings may turn it off.";
+      updateWakeLockStatus();
+      return fallbackStarted;
+    } finally {
+      wakeLockRequestPending = false;
+    }
   }
 
   overlayToggle.addEventListener("click", () => setOverlayVisible(overlay.hidden));
   overlayClose.addEventListener("click", () => setOverlayVisible(false));
   fullscreenButton.addEventListener("click", () => void toggleFullscreen());
-  wakeLockButton.addEventListener("click", () => void toggleWakeLock());
+  leaveLightButton.addEventListener("click", async () => {
+    if (!window.confirm("Leave the audience lights and remove this device from the host’s fixture list?")) return;
+    let token = "";
+    try { token = window.localStorage.getItem("webglow.guest-session") || ""; } catch {}
+    if (!token) {
+      leaveLightMessage.textContent = "This device does not have a saved leave code. Please ask the host to remove it.";
+      return;
+    }
+    leaveLightButton.disabled = true;
+    leaveLightMessage.textContent = "Removing this device…";
+    try {
+      const response = await fetch(apiUrl(`${API_ROOT}/guest-registration/leave`), {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ resumeToken: token }),
+      });
+      if (!response.ok) throw new Error("Could not remove this device right now.");
+      try {
+        window.localStorage.removeItem("webglow.guest-session");
+        window.localStorage.removeItem("webglow.guest-profile");
+      } catch {}
+      window.location.replace("/join");
+    } catch (error) {
+      leaveLightMessage.textContent = error instanceof Error ? error.message : "Could not remove this device right now.";
+      leaveLightButton.disabled = false;
+    }
+  });
 
   document.addEventListener("fullscreenchange", updateFullscreenButton);
   document.addEventListener("webkitfullscreenchange", updateFullscreenButton);
@@ -861,26 +1072,31 @@
   });
   window.addEventListener("offline", () => {
     closeSocket();
-    setConnection("offline", "Device is offline");
+    setConnection("offline", "No internet connection. Check your Wi-Fi.");
     startRestPolling();
   });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && wakeLockRequested && !wakeLock) {
-      void requestWakeLock();
+      void requestWakeLock({ quiet: true });
     }
   });
+  document.addEventListener("pointerdown", () => {
+    if (wakeLockRequested && !wakeLock) void requestWakeLock({ quiet: true });
+  }, { passive: true });
   window.addEventListener("pagehide", () => {
     clearReconnectTimer();
     closeSocket();
+    void stopVideoWakeFallback();
   });
 
   resizeCanvas();
   updateDetails();
   updateFullscreenButton();
-  updateWakeLockButton();
+  updateWakeLockStatus();
+  void requestWakeLock({ quiet: true });
 
   if (!lightId) {
-    setConnection("error", "No light ID in this address");
+    setConnection("error", "This light link is incomplete. Please scan the host’s QR code again.");
     setOverlayVisible(true);
   } else {
     void fetchLight();

@@ -4,12 +4,18 @@
   "description": "Turn any browser into an API-controlled light display.",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=22.18.0"
   },
   "scripts": {
     "build": "tsc && node scripts/copy-static.mjs",
     "check": "tsc --noEmit",
+    "desktop:dev": "npm run build && electron .",
+    "prepare:mac:usb": "node scripts/prepare-macos-usb.mjs",
+    "desktop:mac": "npm run build && npm run prepare:mac:usb && electron-builder --mac dmg --universal",
+    "desktop:mac:x64": "npm run build && npm run prepare:mac:usb && electron-builder --mac dmg --x64",
+    "desktop:mac:arm64": "npm run build && npm run prepare:mac:usb && electron-builder --mac dmg --arm64",
     "start": "node --enable-source-maps dist/index.js",
     "test": "npm run build && node --test test/*.test.mjs"
   },
@@ -20,11 +26,45 @@
     "@fastify/static": "^10.1.10",
     "@fastify/websocket": "^11.3.7",
     "fastify": "^5.12.8",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "usb": "3.3.0"
+  },
+  "optionalDependencies": {
+    "@node-usb/usb-darwin-arm64": "3.3.0",
+    "@node-usb/usb-darwin-x64": "3.3.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/qrcode": "^1.5.6",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
     "typescript": "^7.0.2"
+  },
+  "build": {
+    "appId": "com.webglow.console",
+    "productName": "WebGlow",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "x64ArchFiles": "**/node_modules/@node-usb/usb-darwin-*/usb.darwin-*.node",
+      "target": [
+        "dmg"
+      ],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "WebGlow listens to the selected microphone to decode SMPTE LTC timecode for cue playback.",
+        "NSLocalNetworkUsageDescription": "WebGlow connects to guest display devices and WLED fixtures on your local network."
+      }
+    },
+    "dmg": {
+      "title": "WebGlow ${version}"
+    }
   }
 }

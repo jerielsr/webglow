@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { LightPatch } from './types.js';
 
 export const HISTORY_RETENTIONS = ['all', 'year', 'month', 'week', 'day'] as const;
 export type HistoryRetention = (typeof HISTORY_RETENTIONS)[number];
+
+export interface HistoryFixtureState { id: string; state: LightPatch }
 
 export interface CommandHistoryEvent {
   id: string;
@@ -12,6 +15,8 @@ export interface CommandHistoryEvent {
   summary: string;
   fixtureIds: string[];
   detail?: string;
+  checkpoint?: HistoryFixtureState[];
+  beforeState?: HistoryFixtureState[];
 }
 
 interface PersistedHistory { version: 1; events: CommandHistoryEvent[] }
@@ -28,7 +33,15 @@ function isEvent(value: unknown): value is CommandHistoryEvent {
   const event = value as Partial<CommandHistoryEvent>;
   return typeof event.id === 'string' && typeof event.at === 'string' && typeof event.action === 'string' &&
     typeof event.summary === 'string' && Array.isArray(event.fixtureIds) && event.fixtureIds.every((id) => typeof id === 'string') &&
-    (event.detail === undefined || typeof event.detail === 'string');
+    (event.detail === undefined || typeof event.detail === 'string') &&
+    (event.checkpoint === undefined || (Array.isArray(event.checkpoint) && event.checkpoint.every(isFixtureState))) &&
+    (event.beforeState === undefined || (Array.isArray(event.beforeState) && event.beforeState.every(isFixtureState)));
+}
+
+function isFixtureState(value: unknown): value is HistoryFixtureState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entry = value as Partial<HistoryFixtureState>;
+  return typeof entry.id === 'string' && typeof entry.state === 'object' && entry.state !== null && !Array.isArray(entry.state);
 }
 
 export class CommandHistoryStore {
@@ -56,16 +69,24 @@ export class CommandHistoryStore {
     await this.setRetention(retention);
   }
 
-  async record(input: Omit<CommandHistoryEvent, 'id' | 'at'>): Promise<void> {
+  async record(input: Omit<CommandHistoryEvent, 'id' | 'at'>): Promise<CommandHistoryEvent> {
     const now = new Date();
     const fixtureIds = [...new Set(input.fixtureIds)];
     const previous = this.events.at(-1);
     const coalesceProgrammer = input.action === 'Batch programmer' && previous?.action === input.action &&
       previous.summary === input.summary && previous.detail === input.detail &&
       JSON.stringify(previous.fixtureIds) === JSON.stringify(fixtureIds) && now.getTime() - Date.parse(previous.at) < 1_500;
-    if (coalesceProgrammer && previous) previous.at = now.toISOString();
-    else this.events.push({ ...input, fixtureIds, id: randomUUID(), at: now.toISOString() });
+    if (coalesceProgrammer && previous) {
+      previous.at = now.toISOString();
+      if (input.checkpoint) previous.checkpoint = structuredClone(input.checkpoint);
+    } else this.events.push({ ...input, fixtureIds, id: randomUUID(), at: now.toISOString() });
     await this.pruneAndPersist();
+    return this.events.at(-1)!;
+  }
+
+  async get(id: string): Promise<CommandHistoryEvent | undefined> {
+    const event = this.events.find((candidate) => candidate.id === id);
+    return event ? structuredClone(event) : undefined;
   }
 
   async list(offset = 0, limit = 200): Promise<{

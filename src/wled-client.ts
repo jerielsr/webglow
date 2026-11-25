@@ -17,6 +17,9 @@ const PATTERN_NAMES: Record<Pattern, string[]> = {
   rainbow: ['rainbow'],
   chase: ['chase'],
   twinkle: ['twinkle'],
+  'ramp-up': ['wipe', 'sweep'],
+  'ramp-down': ['fade'],
+  'multi-chase': ['colorful chase', 'chase'],
 };
 
 function asRecord(value: unknown): Record<string, unknown> {

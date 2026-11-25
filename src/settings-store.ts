@@ -18,10 +18,20 @@ export interface PortalAccount {
 interface PersistedSettings {
   version: 1;
   publicBaseUrl?: string;
+  cloudflaredToken?: string;
+  cloudflaredHostname?: string;
+  cloudflaredAutoStart?: boolean;
   guestRegistrationEnabled?: boolean;
   historyRetention?: HistoryRetention;
   guestAutoRemoveEnabled?: boolean;
   guestInactivityHours?: number;
+  guestRememberHours?: number;
+  autoRefreshDevices?: boolean;
+  seatSections?: string[];
+  virtualSubsectionsEnabled?: boolean;
+  virtualSubsectionsCount?: number;
+  fixtureSortMode?: 'id' | 'seat' | 'custom';
+  fixtureOrder?: string[];
   portalAccount?: PortalAccount;
 }
 
@@ -31,16 +41,40 @@ export interface PublicSettings {
   historyRetention: HistoryRetention;
   guestAutoRemoveEnabled: boolean;
   guestInactivityHours: number;
+  guestRememberHours: number;
+  autoRefreshDevices: boolean;
+  seatSections: string[];
+  virtualSubsectionsEnabled: boolean;
+  virtualSubsectionsCount: number;
+  fixtureSortMode: 'id' | 'seat' | 'custom';
+  fixtureOrder: string[];
+}
+
+export interface CloudflaredSettings {
+  configured: boolean;
+  autoStart: boolean;
+  token?: string;
+  hostname?: string;
 }
 
 function cloneSettings(settings: PersistedSettings): PersistedSettings {
   return {
     version: 1,
     ...(settings.publicBaseUrl ? { publicBaseUrl: settings.publicBaseUrl } : {}),
+    ...(settings.cloudflaredToken ? { cloudflaredToken: settings.cloudflaredToken } : {}),
+    ...(settings.cloudflaredHostname ? { cloudflaredHostname: settings.cloudflaredHostname } : {}),
+    ...(settings.cloudflaredAutoStart === undefined ? {} : { cloudflaredAutoStart: settings.cloudflaredAutoStart }),
     ...(settings.guestRegistrationEnabled ? { guestRegistrationEnabled: true } : {}),
     ...(settings.historyRetention ? { historyRetention: settings.historyRetention } : {}),
     ...(settings.guestAutoRemoveEnabled ? { guestAutoRemoveEnabled: true } : {}),
     ...(settings.guestInactivityHours ? { guestInactivityHours: settings.guestInactivityHours } : {}),
+    ...(settings.guestRememberHours ? { guestRememberHours: settings.guestRememberHours } : {}),
+    ...(settings.autoRefreshDevices === undefined ? {} : { autoRefreshDevices: settings.autoRefreshDevices }),
+    ...(settings.seatSections ? { seatSections: [...settings.seatSections] } : {}),
+    ...(settings.virtualSubsectionsEnabled === undefined ? {} : { virtualSubsectionsEnabled: settings.virtualSubsectionsEnabled }),
+    ...(settings.virtualSubsectionsCount === undefined ? {} : { virtualSubsectionsCount: settings.virtualSubsectionsCount }),
+    ...(settings.fixtureSortMode ? { fixtureSortMode: settings.fixtureSortMode } : {}),
+    ...(settings.fixtureOrder ? { fixtureOrder: [...settings.fixtureOrder] } : {}),
     ...(settings.portalAccount ? { portalAccount: { ...settings.portalAccount } } : {}),
   };
 }
@@ -54,10 +88,20 @@ function hasSettingsShape(value: unknown): value is PersistedSettings {
   return (
     settings.version === 1 &&
     (settings.publicBaseUrl === undefined || typeof settings.publicBaseUrl === 'string') &&
+    (settings.cloudflaredToken === undefined || typeof settings.cloudflaredToken === 'string') &&
+    (settings.cloudflaredHostname === undefined || typeof settings.cloudflaredHostname === 'string') &&
+    (settings.cloudflaredAutoStart === undefined || typeof settings.cloudflaredAutoStart === 'boolean') &&
     (settings.guestRegistrationEnabled === undefined || typeof settings.guestRegistrationEnabled === 'boolean') &&
     (settings.historyRetention === undefined || HISTORY_RETENTIONS.includes(settings.historyRetention)) &&
     (settings.guestAutoRemoveEnabled === undefined || typeof settings.guestAutoRemoveEnabled === 'boolean') &&
     (settings.guestInactivityHours === undefined || [1, 6, 12, 24, 72, 168].includes(settings.guestInactivityHours)) &&
+    (settings.guestRememberHours === undefined || [1, 6, 12, 24, 72, 168, 336].includes(settings.guestRememberHours)) &&
+    (settings.autoRefreshDevices === undefined || typeof settings.autoRefreshDevices === 'boolean') &&
+    (settings.seatSections === undefined || (Array.isArray(settings.seatSections) && settings.seatSections.length >= 1 && settings.seatSections.length <= 12 && settings.seatSections.every((name) => typeof name === 'string' && name.trim().length > 0 && name.length <= 80))) &&
+    (settings.virtualSubsectionsEnabled === undefined || typeof settings.virtualSubsectionsEnabled === 'boolean') &&
+    (settings.virtualSubsectionsCount === undefined || (Number.isInteger(settings.virtualSubsectionsCount) && settings.virtualSubsectionsCount >= 2 && settings.virtualSubsectionsCount <= 12)) &&
+    (settings.fixtureSortMode === undefined || ['id', 'seat', 'custom'].includes(settings.fixtureSortMode)) &&
+    (settings.fixtureOrder === undefined || (Array.isArray(settings.fixtureOrder) && settings.fixtureOrder.every((id) => typeof id === 'string' && id.length <= 64))) &&
     (account === undefined ||
       (typeof account.username === 'string' &&
         typeof account.passwordSalt === 'string' &&
@@ -110,7 +154,46 @@ export class SettingsStore {
       historyRetention: this.settings.historyRetention ?? 'month',
       guestAutoRemoveEnabled: this.settings.guestAutoRemoveEnabled === true,
       guestInactivityHours: this.settings.guestInactivityHours ?? 24,
+      guestRememberHours: this.settings.guestRememberHours ?? 24,
+      autoRefreshDevices: this.settings.autoRefreshDevices !== false,
+      seatSections: [...(this.settings.seatSections ?? ['Left', 'Center', 'Right'])],
+      virtualSubsectionsEnabled: this.settings.virtualSubsectionsEnabled === true,
+      virtualSubsectionsCount: this.settings.virtualSubsectionsCount ?? 3,
+      fixtureSortMode: this.settings.fixtureSortMode ?? 'id',
+      fixtureOrder: [...(this.settings.fixtureOrder ?? [])],
     };
+  }
+
+  getCloudflaredSettings(): CloudflaredSettings {
+    return {
+      configured: Boolean(this.settings.cloudflaredToken),
+      autoStart: this.settings.cloudflaredAutoStart === true,
+      ...(this.settings.cloudflaredToken ? { token: this.settings.cloudflaredToken } : {}),
+      ...(this.settings.cloudflaredHostname ? { hostname: this.settings.cloudflaredHostname } : {}),
+    };
+  }
+
+  async updateCloudflaredSettings(input: {
+    token?: string;
+    clearToken?: boolean;
+    hostname?: string;
+    autoStart?: boolean;
+  }): Promise<CloudflaredSettings> {
+    const previous = cloneSettings(this.settings);
+    this.settings = {
+      ...this.settings,
+      ...(input.token ? { cloudflaredToken: input.token } : {}),
+      ...(input.clearToken ? { cloudflaredToken: undefined, cloudflaredAutoStart: false } : {}),
+      ...(input.hostname === undefined ? {} : { cloudflaredHostname: input.hostname || undefined }),
+      ...(input.autoStart === undefined ? {} : { cloudflaredAutoStart: input.autoStart }),
+    };
+    try {
+      await this.persist();
+    } catch (error) {
+      this.settings = previous;
+      throw error;
+    }
+    return this.getCloudflaredSettings();
   }
 
   getUsername(): string | undefined {
@@ -152,6 +235,13 @@ export class SettingsStore {
     historyRetention?: HistoryRetention;
     guestAutoRemoveEnabled?: boolean;
     guestInactivityHours?: number;
+    guestRememberHours?: number;
+    autoRefreshDevices?: boolean;
+    seatSections?: string[];
+    virtualSubsectionsEnabled?: boolean;
+    virtualSubsectionsCount?: number;
+    fixtureSortMode?: 'id' | 'seat' | 'custom';
+    fixtureOrder?: string[];
   }): Promise<PublicSettings> {
     const previous = cloneSettings(this.settings);
     this.settings = {
@@ -163,6 +253,13 @@ export class SettingsStore {
       ...(input.historyRetention === undefined ? {} : { historyRetention: input.historyRetention }),
       ...(input.guestAutoRemoveEnabled === undefined ? {} : { guestAutoRemoveEnabled: input.guestAutoRemoveEnabled }),
       ...(input.guestInactivityHours === undefined ? {} : { guestInactivityHours: input.guestInactivityHours }),
+      ...(input.guestRememberHours === undefined ? {} : { guestRememberHours: input.guestRememberHours }),
+      ...(input.autoRefreshDevices === undefined ? {} : { autoRefreshDevices: input.autoRefreshDevices }),
+      ...(input.seatSections === undefined ? {} : { seatSections: [...input.seatSections] }),
+      ...(input.virtualSubsectionsEnabled === undefined ? {} : { virtualSubsectionsEnabled: input.virtualSubsectionsEnabled }),
+      ...(input.virtualSubsectionsCount === undefined ? {} : { virtualSubsectionsCount: input.virtualSubsectionsCount }),
+      ...(input.fixtureSortMode === undefined ? {} : { fixtureSortMode: input.fixtureSortMode }),
+      ...(input.fixtureOrder === undefined ? {} : { fixtureOrder: [...input.fixtureOrder] }),
     };
     try {
       await this.persist();
@@ -204,7 +301,7 @@ export class SettingsStore {
     const write = this.pendingWrite.catch(() => undefined).then(async () => {
       await mkdir(dirname(this.settingsFile), { recursive: true });
       const temporaryFile = `${this.settingsFile}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-      await writeFile(temporaryFile, serialized, 'utf8');
+      await writeFile(temporaryFile, serialized, { encoding: 'utf8', mode: 0o600 });
       await rename(temporaryFile, this.settingsFile);
     });
     this.pendingWrite = write;

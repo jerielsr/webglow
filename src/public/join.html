@@ -14,13 +14,14 @@
         <span class="console-mark">W</span>
         <p class="eyebrow">WebGlow audience light</p>
         <h1 id="join-title">Join the room</h1>
-        <p id="join-copy">Choose a name to register this phone as its own light. Keep this page open when the service begins.</p>
+        <p id="join-copy">Choose a name and your seating section. By registering, you allow WebGlow to automatically ask your device to keep the screen awake during the service.</p>
         <form id="join-form">
-          <label>Your name <input id="guest-name" maxlength="80" autocomplete="name" placeholder="Alex" required /></label>
-          <button class="console-button go-button" type="submit">Register this light</button>
+          <label>Your name <input id="guest-name" maxlength="80" autocomplete="name" placeholder="Please enter your name" required /></label>
+          <label>Your seating section <select id="guest-section" required><option value="">Choose your section</option></select></label>
+          <button class="console-button go-button" type="submit">Register &amp; keep my screen awake</button>
           <p id="join-message" class="form-message" role="alert"></p>
         </form>
-        <p class="join-note">The host controls the colour and effects. No account, app install, or API token is needed.</p>
+        <p class="join-note">Your host controls the colour and effects. Leave this page open to join in. No account or app install is needed.</p>
       </section>
     </main>
     <script src="/join.js" defer></script>

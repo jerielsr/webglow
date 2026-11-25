@@ -1,0 +1,34 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build WebGlow macOS app",
+			"type": "shell",
+			"command": "npm run desktop:mac",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Build WebGlow",
+			"type": "shell",
+			"command": "npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Build WebGlow macOS DMG",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"desktop:mac"
+			],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

@@ -1,9 +1,12 @@
-const CACHE_NAME = "webglow-console-v2";
+const CACHE_NAME = "webglow-console-v14";
 const APP_ASSETS = [
   "/",
   "/app.html",
   "/portal.css",
   "/app.js",
+  "/timecode-core.js",
+  "/timecode-console.js",
+  "/timecode-processor.js",
   "/manifest.webmanifest",
   "/app-icon.svg"
 ];

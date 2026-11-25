@@ -17,7 +17,8 @@
     <header class="console-header">
       <a class="console-brand" href="/" data-route aria-label="WebGlow Console home"><span class="console-mark">W</span><span>WebGlow <b>Console</b></span></a>
       <nav class="console-nav" aria-label="Portal navigation">
-        <a href="/" data-route data-view-link="console">Control</a>
+        <a href="/" data-route data-view-link="console">Program</a>
+        <a href="/playback" data-route data-view-link="playback">Playback</a>
         <a href="/setup" data-route data-view-link="setup">Setup</a>
         <a href="/monitor" data-route data-view-link="monitor">Monitor</a>
         <a href="/settings" data-route data-view-link="settings">Settings</a>
@@ -35,6 +36,8 @@
           <span class="command-label">Command line</span>
           <output id="command-line">Select fixtures to begin</output>
           <div class="command-actions">
+            <button id="history-undo" class="console-button subtle-button" type="button" title="Undo output change" disabled>Undo</button>
+            <button id="history-redo" class="console-button subtle-button" type="button" title="Redo output change" disabled>Redo</button>
             <button id="clear-programmer" class="console-button subtle-button" type="button">Clear</button>
             <button id="all-fixtures" class="console-button subtle-button" type="button">All fixtures</button>
             <button id="toggle-command-history" class="console-button subtle-button" type="button" aria-expanded="false">History</button>
@@ -52,6 +55,7 @@
               <div><p>Fixture sheet</p><h1 id="fixture-sheet-title">Web displays</h1></div>
               <span id="fixture-count" class="console-count">0 fixtures</span>
             </div>
+            <p id="fixture-sort-hint" class="fixture-sort-hint">Order is controlled in Settings.</p>
             <div id="fixture-grid" class="fixture-grid" aria-live="polite"></div>
             <p id="fixture-empty" class="console-empty" hidden>Create displays in Setup, then select them here.</p>
           </section>
@@ -62,9 +66,9 @@
               <span id="programmer-target" class="console-count">All fixtures</span>
             </div>
             <div class="attribute-tabs" aria-label="Programmer attributes">
-              <button class="attribute-tab active" type="button" data-attribute="intensity">Dimmer</button>
-              <button class="attribute-tab" type="button" data-attribute="colour">Colour</button>
-              <button class="attribute-tab" type="button" data-attribute="effect">Effects</button>
+              <button class="attribute-tab active" type="button" data-attribute="intensity" aria-pressed="true">Dimmer</button>
+              <button class="attribute-tab active" type="button" data-attribute="colour" aria-pressed="true">Colour</button>
+              <button class="attribute-tab active" type="button" data-attribute="effect" aria-pressed="true">Effects</button>
             </div>
             <div class="programmer-attributes">
               <label class="console-fader">
@@ -77,15 +81,43 @@
                 <input id="program-speed" type="range" min="0" max="100" value="50" />
                 <output id="program-speed-output">50%</output>
               </label>
-              <label class="console-field colour-field"><span>Colour</span><input id="program-colour" type="color" value="#2EA8FF" /></label>
+              <div class="colour-and-chase">
+                <label class="console-field colour-field"><span>Colour</span><input id="program-colour" type="color" value="#2EA8FF" /></label>
+                <button id="multi-chase-toggle" class="multi-chase-trigger" type="button" aria-pressed="false" title="Add colours to a chase"><span aria-hidden="true">＋</span><span>Add colours</span></button>
+              </div>
+              <div id="multi-chase-options" class="multi-chase-options" hidden>
+                <div class="multi-chase-palette-heading"><strong>Chase palette</strong><span>Choose each colour’s transition to the next swatch</span></div>
+                <div id="program-color-palette" class="color-picker-list" aria-label="Multi-colour chase palette"></div>
+                <button id="program-add-color" class="console-button subtle-button" type="button">＋ Add colour</button>
+                <label class="console-field"><span>Time per colour (seconds)</span><input id="program-color-step" type="number" min="0.1" max="60" step="0.1" value="0.75" /><small>How long each colour stage lasts before moving to the next.</small></label>
+              </div>
               <label class="console-field"><span>Effect</span>
                 <select id="program-pattern">
-                  <option value="solid">Solid</option><option value="breathe">Breathe</option><option value="pulse">Pulse</option><option value="strobe">Strobe</option><option value="rainbow">Rainbow</option><option value="twinkle">Twinkle</option><option value="chase">Chase</option>
+                  <option value="solid">Solid</option><option value="breathe">Breathe</option><option value="pulse">Pulse</option><option value="strobe">Strobe</option><option value="rainbow">Rainbow</option><option value="twinkle">Twinkle</option><option value="chase">Chase</option><option value="ramp-up">Ramp up</option><option value="ramp-down">Ramp down</option>
                 </select>
+              </label>
+              <label class="console-field"><span>Direction</span>
+                <select id="program-direction" aria-label="Effect direction"><option value="forward">Forward · section order</option><option value="reverse">Reverse · section order</option><option value="front-to-back">Front to back</option><option value="back-to-front">Back to front</option><option value="diagonal-left">Diagonal ↗</option><option value="diagonal-right">Diagonal ↘</option><option value="center-out">Center out</option><option value="edges-in">Edges in</option><option value="random">Random</option></select>
+              </label>
+              <label class="console-field"><span>Tap division</span>
+                <select id="tap-division" aria-label="Tap tempo effect division"><option value="1">1:1 · every beat</option><option value="2">1:2 · every 2 beats</option><option value="4" selected>1:4 · every 4 beats</option><option value="8">1:8 · every 8 beats</option></select>
               </label>
               <label class="console-field"><span>Fade</span>
                 <select id="program-fade"><option value="0">0 s</option><option value="250">0.25 s</option><option value="500">0.5 s</option><option value="1000" selected>1 s</option><option value="2000">2 s</option><option value="5000">5 s</option><option value="10000">10 s</option></select>
               </label>
+            </div>
+            <div class="effect-starter">
+              <div class="effect-starter-heading"><div><strong>Quick effects</strong><span>Choose a look, then tune it with the controls above. Changes are live.</span></div></div>
+              <div class="effect-starter-grid" aria-label="Quick lighting effects">
+                <button class="effect-preset-card" type="button" data-effect-preset="chase" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">➜</span><strong>Chase</strong><small>Move through fixtures</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="color-chase" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">◉</span><strong>Colour chase</strong><small>Cycle a colour palette</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="rainbow" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">🌈</span><strong>Rainbow</strong><small>Flow through hues</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="breathe" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">◌</span><strong>Breathe</strong><small>Soft intensity wave</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="sparkle" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">✦</span><strong>Sparkle</strong><small>Scattered shimmer</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="strobe" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">✴</span><strong>Strobe</strong><small>Fast on/off pulse</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="ramp-up" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">↗</span><strong>Ramp up</strong><small>Build intensity</small></button>
+                <button class="effect-preset-card" type="button" data-effect-preset="ramp-down" aria-pressed="false"><span class="effect-preset-icon" aria-hidden="true">↘</span><strong>Ramp down</strong><small>Fade intensity away</small></button>
+              </div>
             </div>
             <div class="programmer-actions">
               <span id="live-programmer-status" class="live-programmer-status">Live — changes send immediately</span>
@@ -97,12 +129,11 @@
           <aside class="console-panel masters-panel" aria-labelledby="masters-title">
             <div class="console-panel-heading"><div><p>Masters</p><h1 id="masters-title">Playback</h1></div><button id="reset-masters" class="console-button subtle-button" type="button">Reset</button></div>
             <div class="master-toolbar">
-              <label>Deck size <select id="master-layout" aria-label="Master fader deck size"><option value="compact">Compact</option><option value="standard" selected>Standard</option><option value="large">Large touch</option></select></label>
               <div class="master-presets" aria-label="Master presets">
                 <button class="master-preset" type="button" data-master-preset="full">Full</button>
                 <button class="master-preset" type="button" data-master-preset="half">Half</button>
                 <button class="master-preset" type="button" data-master-preset="snap">Snap</button>
-                <button id="tap-tempo" class="master-preset" type="button">Tap</button>
+                <button id="tap-tempo" class="master-preset" type="button" aria-label="Tap tempo">Tap · — BPM</button>
               </div>
             </div>
             <div id="master-deck" class="master-deck" data-layout="standard">
@@ -114,6 +145,20 @@
           </aside>
         </div>
 
+        <section class="console-panel visual-layer-panel" aria-labelledby="visual-layers-title">
+          <div class="console-panel-heading"><div><p>Programmer layers</p><h2 id="visual-layers-title">Screen looks</h2></div><span id="visual-layer-count" class="console-count">0 layers</span></div>
+          <p class="console-copy">Layer media and moving patterns over the colour wash. These settings follow the selected fixtures and are stored when you record a cue. Visual layers run on WebGlow browser displays; WLED fixtures receive the base colour and effect.</p>
+          <div class="visual-media-programmer">
+            <div class="visual-media-heading"><div><strong>Media layer</strong><span id="program-media-status">No media selected</span></div><label class="media-opacity-control">Opacity <output id="program-media-opacity-output">100%</output><input id="program-media-opacity" type="range" min="0" max="100" value="100" aria-label="Media layer opacity" /></label></div>
+            <form id="media-upload-form" class="console-form media-upload-form"><label>Add image, GIF, or silent video<input id="media-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required /></label><button class="console-button go-button" type="submit">Upload media</button></form>
+            <div class="media-program-toolbar"><span id="media-storage" class="console-count">0 B stored</span><button id="apply-media" class="console-button go-button" type="button" disabled>Use selected media</button><button id="clear-media" class="console-button subtle-button" type="button">Clear media layer</button></div>
+            <div id="media-library" class="media-library" aria-label="Media library"></div>
+          </div>
+          <div class="visual-layers-heading"><div><strong>Procedural layers</strong><span>Snow, shapes, and motion patterns above the base look</span></div><button id="program-add-layer" class="console-button subtle-button" type="button">＋ Add visual layer</button></div>
+          <div id="program-visual-layers" class="visual-layer-list" aria-live="polite"></div>
+          <p id="visual-layer-empty" class="console-empty">No visual layers. Add one to build a layered look.</p>
+        </section>
+
         <section class="console-panel cue-stack" aria-labelledby="cue-stack-title">
           <div class="console-panel-heading">
             <div><p>Cue stack</p><h1 id="cue-stack-title">Main playback</h1></div>
@@ -123,14 +168,61 @@
                 <label>Cue <input id="cue-number" inputmode="decimal" value="1" aria-label="Cue number" /></label>
                 <label>Name <input id="cue-name" placeholder="Warm welcome" aria-label="Cue name" /></label>
                 <label>Targets <select id="cue-target-mode"><option value="selected">Selected</option><option value="all">All current &amp; future</option></select></label>
-                <label class="cue-scale-toggle"><input id="cue-scale-effect" type="checkbox" /><span>Auto-scale effect over current fixture count</span></label>
+                <label class="cue-scale-toggle"><input id="cue-scale-effect" type="checkbox" /><span>Auto-scale across current and future guests</span></label>
                 <button id="record-cue" class="console-button record-button" type="button">Record</button>
               </div>
             </div>
           </div>
+          <div class="cue-stack-manager">
+            <div id="cue-stack-tabs" class="cue-stack-tabs" aria-label="Cue stacks"></div>
+            <div class="cue-stack-tools"><label>New stack / rename<input id="cue-stack-name" maxlength="80" placeholder="Song name" /></label><button id="cue-stack-earlier" class="console-button subtle-button" type="button" title="Move stack earlier">← Stack</button><button id="cue-stack-later" class="console-button subtle-button" type="button" title="Move stack later">Stack →</button><button id="create-cue-stack" class="console-button subtle-button" type="button">Create stack</button><button id="rename-cue-stack" class="console-button subtle-button" type="button">Rename active</button><button id="delete-cue-stack" class="console-button danger-button" type="button">Delete empty</button></div>
+          </div>
           <div class="cue-table-head" aria-hidden="true"><span>Cue</span><span>Name</span><span>Fixtures</span><span>Fade</span><span>Playback</span></div>
           <div id="cue-list" class="cue-list"></div>
           <p id="cue-empty" class="console-empty">Record the current programmer values as Cue 1.</p>
+        </section>
+
+        <section class="console-panel timecode-editor-block program-song-timeline" aria-label="Song cue timeline programming">
+          <div class="console-panel-heading"><div><p>Song timeline · relative time</p><h2>Arrange cues for this song</h2></div></div>
+          <form id="timecode-sequence-form" class="timecode-inline-form"><label>New timeline name<input id="timecode-sequence-name" maxlength="80" placeholder="Welcome" required /></label><button class="console-button subtle-button" type="submit">Add timeline</button></form>
+          <div id="timecode-sequence-list" class="timecode-sequence-list" aria-label="Saved song timelines"></div>
+          <select id="timecode-sequence-select" class="visually-hidden" aria-label="Timeline to edit" tabindex="-1"></select>
+          <div class="timecode-sequence-tools"><span id="timecode-active-sequence" class="timecode-active-sequence">Select a song timeline</span><button id="timecode-sequence-delete" class="console-button danger-button" type="button">Delete timeline</button></div>
+          <div class="timecode-capture-tools"><span id="timecode-sequence-origin">LTC zero not set</span><button id="timecode-set-zero" class="console-button subtle-button" type="button">Set zero to current LTC</button></div>
+          <form id="timecode-event-form" class="timecode-inline-form"><label>Cue stack<select id="timecode-event-stack" required></select></label><label>Cue<select id="timecode-event-cue" required></select></label><label>At (HH:MM:SS:FF)<input id="timecode-event-frame" value="00:00:00:00" inputmode="numeric" required /></label><button id="timecode-capture-event" class="console-button subtle-button" type="button">Use current LTC</button><button class="console-button go-button" type="submit">Place cue</button></form>
+          <label class="guest-toggle timecode-live-record"><input id="timecode-live-record" type="checkbox" disabled /><span>When Record is pressed in Program, add that cue to this song at the current LTC position</span></label>
+          <div id="timecode-song-timeline" class="timecode-song-timeline" aria-label="Song cue timeline"></div>
+          <div id="timecode-sequence-events" class="timecode-event-list"></div>
+        </section>
+
+      </section>
+
+      <section id="view-playback" class="app-view" hidden>
+        <div class="view-heading"><div><p>SMPTE playback</p><h1>Playback</h1><span>Arm LTC or run a test clock, then place song timelines on the absolute show timeline.</span></div></div>
+        <section class="console-panel timecode-console" aria-labelledby="timecode-console-title">
+          <div class="console-panel-heading"><div><p>SMPTE playback</p><h1 id="timecode-console-title">Timecode transport</h1></div><span id="timecode-control-status" class="console-count">Disarmed</span></div>
+          <div class="timecode-console-top">
+            <div><span class="timecode-label">Current clock</span><output id="timecode-control-clock" class="timecode-clock">00:00:00:00</output><span id="timecode-control-input" class="timecode-input-state">LTC input stopped</span></div>
+            <div class="timecode-transport">
+              <label>Test from <input id="timecode-test-start" value="00:00:00:00" inputmode="numeric" aria-label="Test playback start timecode" /></label>
+              <button id="timecode-arm-ltc" class="console-button subtle-button" type="button" aria-pressed="false">Arm LTC</button>
+              <button id="timecode-play-test" class="console-button go-button" type="button">Play test</button>
+              <button id="timecode-stop" class="console-button danger-button" type="button">Stop</button>
+            </div>
+          </div>
+          <p class="console-copy">Arm LTC to run cues from the microphone timecode input. Play test advances the same show timeline internally, without an incoming signal. Manual GO remains available as a backup.</p>
+        </section>
+        <section class="console-panel timeline-workspace" aria-label="Timecode timeline programming">
+          <div class="timecode-editor-grid playback-timeline-grid">
+            <section class="timecode-editor-block">
+              <div class="console-panel-heading"><div><p>Project timeline · absolute show time</p><h2>Place songs on the show clock</h2></div></div>
+              <div id="timecode-project-sequence-list" class="timecode-sequence-list" aria-label="Song timelines available to place"></div>
+              <select id="timecode-segment-sequence" class="visually-hidden" aria-label="Song timeline to place" tabindex="-1" required></select>
+              <form id="timecode-segment-form" class="timecode-inline-form"><label>Start at (HH:MM:SS:FF)<input id="timecode-segment-start" value="00:00:00:00" inputmode="numeric" required /></label><button class="console-button go-button" type="submit">Place selected song</button></form>
+              <div id="timecode-project-timeline" class="timecode-project-timeline"><p class="console-empty">Add a song timeline and place it on the show clock.</p></div>
+              <div id="timecode-project-segments" class="timecode-event-list"></div>
+            </section>
+          </div>
         </section>
       </section>
 
@@ -140,7 +232,7 @@
         <div class="monitor-grid">
           <section class="console-panel"><div class="console-panel-heading"><div><p>WebGlow process</p><h1>Runtime</h1></div></div><dl id="monitor-process" class="console-details"></dl></section>
           <section class="console-panel"><div class="console-panel-heading"><div><p>HTTP and WebSocket</p><h1>Traffic</h1></div></div><dl id="monitor-traffic" class="console-details"></dl></section>
-          <section class="console-panel"><div class="console-panel-heading"><div><p>Docker host</p><h1>Host capacity</h1></div></div><dl id="monitor-host" class="console-details"></dl></section>
+          <section class="console-panel"><div class="console-panel-heading"><div><p>Application host</p><h1>Host capacity</h1></div></div><dl id="monitor-host" class="console-details"></dl></section>
           <section class="console-panel"><div class="console-panel-heading"><div><p>Audience devices</p><h1>Guest activity</h1></div></div><dl id="monitor-guests" class="console-details"></dl><div id="monitor-guest-list" class="monitor-guest-list"></div></section>
         </div>
         <p id="monitor-updated" class="monitor-updated"></p>
@@ -150,44 +242,152 @@
         <div class="view-heading"><div><p>Fixture setup</p><h1>Create and manage fixtures</h1><span>Display links, WLED connections, and fixture records live here; server configuration is in Settings.</span></div></div>
         <div class="setup-console-grid">
           <section class="console-panel">
-            <div class="console-panel-heading"><div><p>New fixture</p><h1>Create display</h1></div></div>
+            <div class="console-panel-heading"><div><p>New fixture</p><h1>Create fixture</h1></div></div>
             <form id="create-light-form" class="console-form">
-              <label>Fixture type <select id="new-light-kind"><option value="display">Web display</option><option value="wled">WLED device</option></select><small>Web displays open a full-screen URL. WLED devices are controlled directly over your local network.</small></label>
+              <label>Fixture type <select id="new-light-kind"><option value="display">Web display</option><option value="wled">WLED device</option><option value="dmx">DMX fixture</option></select><small>Web displays open a full-screen URL. WLED devices use Wi-Fi. DMX fixtures are patched into a 512-channel universe.</small></label>
               <label>Fixture ID <input id="new-light-id" maxlength="64" placeholder="kitchen-tablet" autocomplete="off" /><small>Optional. Letters, numbers, hyphens, and underscores only.</small></label>
               <label>Fixture name <input id="new-light-name" maxlength="80" placeholder="Kitchen tablet" autocomplete="off" /></label>
               <label id="new-wled-url-field" hidden>WLED URL <input id="new-wled-url" type="url" placeholder="http://wled.local" inputmode="url" autocomplete="url" /><small>WebGlow checks this address before adding the fixture. The container must be able to reach it.</small></label>
               <label id="new-wled-segment-field" hidden>WLED segment <input id="new-wled-segment" type="number" min="0" max="255" value="0" inputmode="numeric" /><small>Use 0 for the primary segment.</small></label>
+              <label id="new-dmx-profile-field" hidden>Fixture profile <select id="new-dmx-profile"></select><small>Profiles define the DMX channel count and what each channel controls.</small></label>
+              <label id="new-dmx-address-field" hidden>DMX start address <input id="new-dmx-address" type="number" min="1" max="512" value="1" inputmode="numeric" /><small>Addresses are 1–512. WebGlow rejects overlapping patches.</small></label>
               <button id="create-fixture-button" class="console-button go-button" type="submit">Create web display</button>
             </form>
           </section>
           <section class="console-panel setup-note">
-            <p>Display workflow</p><h1>1. Create<br />2. Copy URL<br />3. Open it fullscreen</h1>
-            <span>Each phone, tablet, or WLED device becomes one individually addressable fixture.</span>
+            <p>Fixture workflow</p><h1>Patch displays,<br />WLED, and DMX</h1>
+            <span>Display links, network fixtures, and DMX addresses appear together in the fixture sheet and respond to the same live programmer.</span>
+            <div id="setup-guest-share" class="setup-guest-share" hidden><div><strong>Join the audience lights</strong><span>Scan to register a phone or tablet as a display fixture.</span></div><img id="setup-guest-qr" class="qr-code-preview" alt="QR code to join WebGlow audience lights" /></div>
           </section>
         </div>
         <section class="console-panel fixture-manager">
-          <div class="console-panel-heading"><div><p>Fixture manager</p><h1>Displays</h1></div><button id="refresh-lights" class="console-button subtle-button" type="button">Refresh</button></div>
+          <div class="console-panel-heading"><div><p>Fixture manager</p><h1>Patched fixtures</h1></div><button id="refresh-lights" class="console-button subtle-button" type="button">Refresh</button></div>
           <div id="setup-lights" class="setup-lights"></div>
           <p id="setup-empty" class="console-empty">No displays yet.</p>
+        </section>
+        <section class="console-panel dmx-patch-manager">
+          <div class="console-panel-heading"><div><p>DMX universe</p><h1>Patch by channel</h1><span class="console-copy">Choose a fixture and tap a channel, or drag a fixture row onto a channel cell. Existing typed start addresses remain available in each fixture row.</span></div><button id="toggle-dmx-patch" class="console-button subtle-button" type="button" aria-expanded="false">Open patch table</button></div>
+          <div id="dmx-patch-panel" hidden>
+            <div class="dmx-patch-tools"><label>Fixture to patch<select id="dmx-patch-fixture"><option value="">Choose a DMX fixture</option></select></label><span id="dmx-patch-selection" class="console-copy">Select a fixture, then choose its start channel.</span></div>
+            <div id="dmx-universe-grid" class="dmx-universe-grid" role="grid" aria-label="512-channel DMX universe"></div>
+          </div>
+        </section>
+        <section class="console-panel dmx-setup-panel">
+          <div class="console-panel-heading"><div><p>Fixture library</p><h1>Profiles &amp; fixture modes</h1></div></div>
+          <div class="dmx-profile-layout">
+            <form id="dmx-profile-form" class="console-form dmx-profile-form">
+              <div class="console-panel-heading"><div><p>Fixture library</p><h2 id="dmx-profile-form-title">Create custom profile</h2></div></div>
+              <label>Profile name <input id="dmx-profile-name" maxlength="80" placeholder="My RGB fixture" required /></label>
+              <div class="dmx-channel-heading"><span>Channel layout, in DMX order</span><button id="add-dmx-channel" class="console-button subtle-button" type="button">Add channel</button></div>
+              <div id="dmx-profile-channels" class="dmx-profile-channels"></div>
+              <div class="row-actions"><button id="save-dmx-profile" class="console-button go-button" type="submit">Save profile</button><button id="cancel-dmx-profile-edit" class="console-button subtle-button" type="button" hidden>Cancel edit</button></div>
+              <p class="console-copy">For an Operation Mode channel, enter mappings like <code>solid=0, chase=160</code>. Values are sent exactly as defined by your fixture’s manual.</p>
+            </form>
+            <div class="dmx-profile-list-wrap"><h2>Available profiles</h2><div id="dmx-profile-list" class="dmx-profile-list"></div></div>
+          </div>
         </section>
       </section>
 
       <section id="view-settings" class="app-view" hidden>
-        <div class="view-heading"><div><p>System settings</p><h1>Server, container, and portal access</h1><span>These details are kept away from the operator console.</span></div><button id="logout" class="console-button subtle-button" type="button">Sign out</button></div>
-        <div class="settings-grid">
-          <section class="console-panel">
+        <div class="view-heading"><div><p>System settings</p><h1>Service and portal access</h1><span>Host, deployment, and account details are kept away from the operator console.</span></div><button id="logout" class="console-button subtle-button" type="button">Sign out</button></div>
+        <div class="settings-layout">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button type="button" class="active" data-settings-tab="display">Display &amp; fixtures</button>
+            <button type="button" data-settings-tab="dmx">DMX</button>
+            <button type="button" data-settings-tab="playback">Playback</button>
+            <button type="button" data-settings-tab="timecode">Timecode</button>
+            <button type="button" data-settings-tab="permissions">Permissions</button>
+            <button type="button" data-settings-tab="audience">Audience</button>
+            <button type="button" data-settings-tab="history">History &amp; media</button>
+            <button type="button" data-settings-tab="showfile">Showfile</button>
+            <button type="button" data-settings-tab="server">Server &amp; API</button>
+            <button type="button" data-settings-tab="account">Account</button>
+          </nav>
+          <div class="settings-grid">
+          <section class="console-panel" data-settings-category="dmx">
+            <div class="console-panel-heading"><div><p>Optional USB output</p><h1>uDMX adapter</h1><span id="dmx-connection-summary" class="console-copy">Checking for an adapter…</span></div><button id="refresh-dmx-status" class="console-button subtle-button" type="button">Check adapter</button></div>
+            <dl id="dmx-connection-details" class="console-details"></dl>
+            <p class="dmx-safety-note"><strong>Hardware note:</strong> DMX output is optional; browser displays, WLED fixtures, guest registration, and the programmer continue to work without this adapter. The original uDMX interface is bus-powered and not galvanically isolated. Use appropriate electrical protection.</p>
+            <p class="console-copy">Fixture profiles and the 512-channel patch table are in Setup. This page reports adapter detection and output errors.</p>
+          </section>
+          <section class="console-panel" data-settings-category="display">
+            <div class="console-panel-heading"><div><p>Fixture sheet</p><h1>Ordering &amp; layout</h1></div></div>
+            <p class="console-copy">Choose fixture ID, audience seating order, or a custom order. In custom mode, drag fixtures in the Program view to arrange them.</p>
+            <label class="settings-control">Fixture order <select id="fixture-sort-mode"><option value="id">Fixture ID</option><option value="seat">Seating sections</option><option value="custom">Custom drag order</option></select></label>
+          </section>
+          <section class="console-panel" data-settings-category="playback">
+            <div class="console-panel-heading"><div><p>Playback surface</p><h1>Master deck</h1></div></div>
+            <p class="console-copy">Choose the fader deck density for the Program page. Large touch controls are intended for phone and tablet operation.</p>
+            <label class="settings-control">Deck size <select id="master-layout" aria-label="Master fader deck size"><option value="compact">Compact</option><option value="standard" selected>Standard</option><option value="large">Large touch</option></select></label>
+            <label class="guest-toggle master-wheel-setting"><input id="master-wheel-control" type="checkbox" /><span>Use mouse wheel over a master fader to adjust its level</span></label>
+          </section>
+          <section class="console-panel timecode-settings" data-settings-category="timecode" aria-labelledby="timecode-settings-title">
+            <div class="console-panel-heading"><div><p>Audio sync</p><h1 id="timecode-settings-title">SMPTE / LTC input</h1></div><span id="timecode-settings-status" class="console-count">Input stopped</span></div>
+            <p class="console-copy">Connect the Mac's microphone or audio-interface input to a linear timecode feed. The decoder listens locally and does not stream microphone audio to WebGlow clients.</p>
+            <div class="console-form timecode-settings-form"><label>Frame rate<select id="timecode-frame-rate"><option value="23.976">23.976 fps</option><option value="24">24 fps</option><option value="25">25 fps</option><option value="29.97df">29.97 fps · drop-frame</option><option value="30">30 fps</option></select></label><label>Microphone input<select id="timecode-audio-device"><option value="">Default microphone</option></select></label><div><button id="timecode-refresh-devices" class="console-button subtle-button" type="button">Refresh inputs</button><button id="timecode-save-settings" class="console-button go-button" type="button">Save timecode settings</button><button id="timecode-start-input" class="console-button go-button" type="button">Start LTC monitor</button><button id="timecode-stop-input" class="console-button subtle-button" type="button" disabled>Stop monitor</button></div></div>
+            <div class="timecode-monitor"><output id="timecode-settings-clock" class="timecode-clock">00:00:00:00</output><div class="timecode-meter"><span>Input level</span><meter id="timecode-input-level" min="0" max="1" value="0">0</meter><span id="timecode-input-detail">Choose an input, then start the monitor.</span></div></div>
+            <div class="timecode-diagnostics">
+              <div class="console-panel-heading"><div><p>Signal troubleshooting</p><h2>Decoder diagnostics</h2></div><button id="timecode-export-diagnostics" class="console-button subtle-button" type="button">Export diagnostics</button></div>
+              <p id="timecode-diagnostics-status" class="timecode-diagnostics-status" aria-live="polite">Start the monitor to capture diagnostic data.</p>
+              <dl class="timecode-diagnostic-grid">
+                <div><dt>Capture</dt><dd id="timecode-diag-capture">Stopped</dd></div>
+                <div><dt>Selected signal</dt><dd id="timecode-diag-signal">No audio samples yet.</dd></div>
+                <div><dt>Decoder progress</dt><dd id="timecode-diag-decoder">No decoder data yet.</dd></div>
+                <div><dt>Last valid frame</dt><dd id="timecode-diag-last-frame">No valid frame decoded yet.</dd></div>
+              </dl>
+              <ol id="timecode-diagnostics-events" class="timecode-diagnostic-events" aria-label="Recent LTC diagnostic events"></ol>
+              <p class="timecode-diagnostics-note">The export includes device label, capture format, audio levels, decoder counters, and recent events. It never records microphone audio or the hardware device ID.</p>
+            </div>
+          </section>
+          <section class="console-panel permissions-panel" data-settings-category="permissions">
+            <div class="console-panel-heading"><div><p>Device access</p><h1>Permissions &amp; connectivity</h1></div><button id="permissions-refresh" class="console-button subtle-button" type="button">Refresh checks</button></div>
+            <p class="console-copy">WebGlow only requests microphone access for local LTC decoding. Display pages automatically request Screen Wake Lock and try a muted, nearly invisible video fallback if needed. This is best-effort: browser support, HTTPS, low-power mode, and operating-system policy can still affect it.</p>
+            <div class="permission-checks">
+              <article><div><strong>Microphone · LTC</strong><span id="permission-input-count">Checking inputs…</span></div><output id="permission-microphone-status">Checking permission…</output><button id="permission-request-mic" class="console-button subtle-button" type="button">Request microphone access</button></article>
+              <article><div><strong>Secure browser context</strong><span>Required by browser microphone APIs</span></div><output id="permission-secure-status">Checking…</output></article>
+              <article><div><strong>Local network</strong><span>Required for WLED and guest phones/tablets</span></div><output id="permission-network-status">Checking…</output></article>
+              <article><div><strong>Fullscreen</strong><span>Display pages enter fullscreen from their own control</span></div><output id="permission-fullscreen-status">Checking…</output></article>
+              <article><div><strong>Keep screen awake</strong><span>Available on supported display browsers</span></div><output id="permission-wake-status">Checking…</output></article>
+            </div>
+            <div class="permission-guidance">
+              <h2>If a microphone is missing</h2>
+              <ol>
+                <li>Choose <b>Request microphone access</b>, approve both macOS and browser prompts, then choose <b>Refresh inputs</b> to reveal individually selectable devices.</li>
+                <li>On macOS, check System Settings → Privacy &amp; Security → Microphone and enable WebGlow, then restart it.</li>
+                <li>Connect/enable the input in System Settings → Sound or Audio MIDI Setup, then refresh inputs. WebGlow can list only inputs exposed by macOS and the browser.</li>
+              </ol>
+              <p>For guest displays and WLED, allow WebGlow through the macOS firewall and keep the Mac and devices on a network that permits local device-to-device traffic. If you access the portal remotely, use HTTPS for browser microphone access.</p>
+            </div>
+          </section>
+          <section class="console-panel" data-settings-category="server">
+            <div class="console-panel-heading"><div><p>Server &amp; application</p><h1>Configuration</h1></div></div>
+            <dl id="server-details" class="console-details"></dl>
+            <p id="https-trust-note" class="console-copy">HTTPS certificates protect traffic in transit. A certificate generated by WebGlow is not automatically trusted by phones or browsers.</p>
+            <a id="download-https-ca" class="console-button subtle-button" href="/api/v1/https/ca" hidden>Download WebGlow CA certificate</a>
+          </section>
+          <section class="console-panel" data-settings-category="server">
             <div class="console-panel-heading"><div><p>Display address</p><h1>Public application URL</h1></div></div>
             <p class="console-copy">Use the address phones and tablets can reach. Display links use it instead of the local IP address and port.</p>
             <form id="public-url-form" class="console-form">
               <label>Public base URL <input id="public-base-url" type="url" placeholder="https://lights.example.com" inputmode="url" /></label>
-              <div><button class="console-button go-button" type="submit">Save address</button><button id="use-current-url" class="console-button subtle-button" type="button">Use current</button></div>
+              <div><button class="console-button go-button" type="submit">Save address</button><button id="use-current-url" class="console-button subtle-button" type="button">Use current</button><button id="use-tunnel-hostname" class="console-button subtle-button" type="button">Use tunnel hostname</button></div>
             </form>
+            <div class="public-url-qr-tools"><button id="download-public-url-qr" class="console-button subtle-button" type="button">Generate &amp; download QR code</button><div id="public-url-qr-preview" class="public-url-qr-preview" hidden><img id="public-url-qr-image" class="qr-code-preview" alt="QR code for the public application URL" /><span id="public-url-qr-label"></span></div></div>
           </section>
-          <section class="console-panel">
-            <div class="console-panel-heading"><div><p>Server &amp; container</p><h1>Configuration</h1></div></div>
-            <dl id="server-details" class="console-details"></dl>
+          <section class="console-panel cloudflared-panel" data-settings-category="server">
+            <div class="console-panel-heading"><div><p>Remote access</p><h1>Cloudflare Tunnel</h1></div><span id="cloudflared-state" class="console-count">Not configured</span></div>
+            <p class="console-copy">Create a remotely managed tunnel in Cloudflare, then paste the connector token here. In the tunnel’s Routes tab, add a Published application route to <code>http://127.0.0.1:1828</code> (or the port shown above). This outbound tunnel avoids venue-router changes. <a href="https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/" target="_blank" rel="noreferrer">Cloudflare setup guide</a></p>
+            <form id="cloudflared-form" class="console-form">
+              <label>Cloudflare hostname <input id="cloudflared-hostname" type="text" placeholder="lights.example.com" autocomplete="off" /></label>
+              <label>Tunnel token <input id="cloudflared-token" type="password" placeholder="Paste the connector token; leave blank to keep the saved token" autocomplete="new-password" /></label>
+              <label class="guest-toggle"><input id="cloudflared-auto-start" type="checkbox" /><span>Connect automatically when WebGlow starts</span></label>
+              <div><button class="console-button go-button" type="submit">Save tunnel settings</button><button id="cloudflared-clear-token" class="console-button danger-button" type="button">Clear saved token</button></div>
+            </form>
+            <div class="cloudflared-actions"><button id="cloudflared-connect" class="console-button go-button" type="button">Connect tunnel</button><button id="cloudflared-disconnect" class="console-button subtle-button" type="button">Disconnect</button><span id="cloudflared-message" class="console-copy" role="status"></span></div>
+            <pre id="cloudflared-output" class="cloudflared-output" aria-label="Recent Cloudflare Tunnel output">No tunnel output yet.</pre>
+            <p class="console-copy">The token is stored in WebGlow’s local settings file with owner-only permissions and is never returned by the API. Install <a href="https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/" target="_blank" rel="noreferrer">cloudflared</a> on the same host/container where WebGlow runs.</p>
           </section>
-          <section class="console-panel">
+          <section class="console-panel" data-settings-category="account">
             <div class="console-panel-heading"><div><p>Portal access</p><h1>Change password</h1></div></div>
             <form id="password-form" class="console-form">
               <label>Current password <input id="current-password" type="password" autocomplete="current-password" minlength="12" required /></label>
@@ -195,22 +395,22 @@
               <button class="console-button subtle-button" type="submit">Change password</button>
             </form>
           </section>
-          <section class="console-panel">
+          <section class="console-panel" data-settings-category="server">
             <div class="console-panel-heading"><div><p>Automation</p><h1>API &amp; PWA</h1></div></div>
-            <p class="console-copy">Portal access uses a secure session. External controllers use the optional Bearer token configured in Docker.</p>
+            <p class="console-copy">Portal access uses a secure session. External controllers can use the optional Bearer token configured in the application environment.</p>
             <ul class="console-list"><li>GET /api/v1/lights</li><li>POST /api/v1/lights/batch</li><li>POST /api/v1/scenes/:cue/go</li></ul>
             <button id="install-app" class="console-button subtle-button" type="button" hidden>Install WebGlow</button>
           </section>
-          <section class="console-panel guest-settings-panel">
+          <section class="console-panel guest-settings-panel" data-settings-category="audience">
             <div class="console-panel-heading"><div><p>Guest lights</p><h1>Audience registration</h1></div></div>
             <p class="console-copy">Open registration only when you are ready to share the join link or QR code. Each guest receives an individually controllable browser light.</p>
             <form id="guest-registration-form" class="console-form">
               <label class="guest-toggle"><input id="guest-registration-enabled" type="checkbox" /><span>Allow guests to register lights</span></label>
               <div><button class="console-button go-button" type="submit">Save guest access</button><button id="copy-guest-url" class="console-button subtle-button" type="button">Copy join URL</button></div>
             </form>
-            <div id="guest-share" class="guest-share" hidden><code id="guest-join-url"></code><img id="guest-qr" alt="QR code for the guest registration page" /></div>
+            <div id="guest-share" class="guest-share" hidden><code id="guest-join-url"></code><img id="guest-qr" class="qr-code-preview" alt="QR code for the guest registration page" /></div>
           </section>
-          <section class="console-panel">
+          <section class="console-panel" data-settings-category="history">
             <div class="console-panel-heading"><div><p>Command history</p><h1>Retention &amp; storage</h1></div></div>
             <p class="console-copy">History stores cue, fixture, guest, and live output commands. Changing retention permanently removes entries older than the selected window.</p>
             <form id="history-retention-form" class="console-form">
@@ -219,23 +419,38 @@
               <button class="console-button go-button" type="submit">Save retention</button>
             </form>
           </section>
-          <section class="console-panel">
+          <section class="console-panel" data-settings-category="audience">
             <div class="console-panel-heading"><div><p>Audience management</p><h1>Inactive guest cleanup</h1></div></div>
             <p class="console-copy">Optionally remove QR-created guest fixtures after their display has disconnected and stayed away for the selected period.</p>
             <form id="guest-expiry-form" class="console-form">
               <label class="guest-toggle"><input id="guest-auto-remove-enabled" type="checkbox" /><span>Automatically remove inactive guests</span></label>
               <label>Inactive for<select id="guest-inactivity-hours"><option value="1">1 hour</option><option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option></select></label>
+              <label>Remember this device for<select id="guest-remember-hours"><option value="1">1 hour</option><option value="6">6 hours</option><option value="12">12 hours</option><option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option><option value="336">14 days</option></select><small>If a guest returns during this period, the same display fixture reconnects without another registration.</small></label>
               <button class="console-button go-button" type="submit">Save cleanup policy</button>
             </form>
           </section>
-          <section class="console-panel media-library-panel">
-            <div class="console-panel-heading"><div><p>Looks &amp; media</p><h1>Display media library</h1></div><span id="media-storage" class="console-count">0 B</span></div>
-            <p class="console-copy">Upload JPEG, PNG, WebP, GIF, MP4, or WebM (up to 40 MB). Files are stored once on the server and streamed to displays locally; video plays muted and loops.</p>
-            <form id="media-upload-form" class="console-form media-upload-form"><label>Upload image, GIF, or silent video<input id="media-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required /></label><button class="console-button go-button" type="submit">Upload media</button></form>
-            <div class="media-apply-toolbar"><label>Target<select id="media-target-mode"><option value="selected">Selected browser fixtures</option><option value="all">All current browser fixtures</option></select></label><button id="apply-media" class="console-button go-button" type="button" disabled>Show on fixtures</button><button id="clear-media" class="console-button subtle-button" type="button">Clear media</button></div>
-            <div id="media-library" class="media-library"></div>
+          <section class="console-panel" data-settings-category="audience">
+            <div class="console-panel-heading"><div><p>Audience layout</p><h1>Sections &amp; live roster</h1></div></div>
+            <p class="console-copy">Guests select one of these sections when joining. The top-to-bottom order is the reference for left/right, front/back, diagonal, and center/edge effects. Arrange the names to match your room; use between 1 and 12 unique names.</p>
+            <form id="audience-behavior-form" class="console-form">
+              <label>Section names <textarea id="seat-sections" rows="4" placeholder="Left&#10;Center&#10;Right"></textarea></label>
+              <label class="guest-toggle"><input id="virtual-subsections-enabled" type="checkbox" /><span>Split each section into virtual subsections for more detailed effects</span></label>
+              <label id="virtual-subsections-count-field" class="settings-control" hidden>Virtual subsections per section<select id="virtual-subsections-count"><option value="2">2 subsections</option><option value="3">3 subsections</option><option value="4">4 subsections</option><option value="5">5 subsections</option><option value="6">6 subsections</option><option value="7">7 subsections</option><option value="8">8 subsections</option><option value="9">9 subsections</option><option value="10">10 subsections</option><option value="11">11 subsections</option><option value="12">12 subsections</option></select></label>
+              <small class="console-copy">Guests are assigned evenly to virtual subsections within their chosen section, in registration order. This does not change the section they choose when joining.</small>
+              <label class="guest-toggle"><input id="auto-refresh-devices" type="checkbox" /><span>Automatically refresh fixtures when guests join</span></label>
+              <button class="console-button go-button" type="submit">Save audience settings</button>
+            </form>
           </section>
+          <section class="console-panel showfile-panel" data-settings-category="showfile">
+            <div class="console-panel-heading"><div><p>Portable show data</p><h1>Save or load a showfile</h1></div></div>
+            <p class="console-copy">A showfile contains cues and stacks, song/project timecode timelines, configured fixtures and their current output, plus audience-section ordering. Portal accounts, server/API settings, and registered guest lights are kept separate.</p>
+            <label class="guest-toggle showfile-media-toggle"><input id="showfile-include-media" type="checkbox" /><span>Bundle media referenced by fixtures and cues inside the showfile (up to 200 MB)</span></label>
+            <div class="showfile-actions"><button id="showfile-export" class="console-button go-button" type="button">Export showfile</button><label class="console-button subtle-button showfile-import-label">Load showfile<input id="showfile-import" type="file" accept=".wgshow,.json,application/json" /></label></div>
+            <p class="console-copy showfile-warning">Loading replaces this server’s cues, cue stacks, timecode timelines, configured fixtures, and section ordering. Existing guest registrations, portal access and server settings are preserved. WLED fixtures in the file may be updated.</p>
+          </section>
+          </div>
         </div>
+        <div class="settings-easter-egg"><button id="settings-about" type="button" aria-label="About WebGlow" aria-expanded="false">WebGlow · 1.0</button><p id="psalm-easter-egg" class="psalm-easter-egg" hidden>“You, Lord, keep my lamp burning; my God turns my darkness into light.” — Psalm 18:28 (NIV)</p></div>
       </section>
     </main>
 
@@ -251,13 +466,16 @@
     </div>
     <div id="reset-dialog" class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title" hidden>
       <form id="reset-form" class="auth-card">
-        <p class="eyebrow">Recovery</p><h1 id="reset-title">Reset portal password</h1><p class="subtle">Use the recovery token set as WEBGLOW_PASSWORD_RESET_TOKEN in your Docker stack.</p>
+        <p class="eyebrow">Recovery</p><h1 id="reset-title">Reset portal password</h1><p class="subtle">Use the recovery token set as WEBGLOW_PASSWORD_RESET_TOKEN in your application environment.</p>
         <label>Username <input id="reset-username" autocomplete="username" required /></label>
         <label>Recovery token <input id="reset-token" type="password" required /></label>
         <label>New password <input id="reset-password" type="password" minlength="12" autocomplete="new-password" required /></label>
         <button class="console-button go-button" type="submit">Reset password</button><button id="cancel-reset" class="text-button" type="button">Back to sign in</button><p id="reset-error" class="form-message" role="alert"></p>
       </form>
     </div>
+    <dialog id="qr-modal" class="qr-modal" aria-label="Enlarged QR code">
+      <div class="qr-modal-card"><button id="qr-modal-close" class="console-button subtle-button qr-modal-close" type="button" aria-label="Close QR code">×</button><img id="qr-modal-image" alt="Enlarged QR code" /><p id="qr-modal-label" class="console-copy"></p><button id="qr-modal-download" class="console-button go-button" type="button">Download transparent PNG</button></div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <script src="/app.js" defer></script>
   </body>

@@ -11,9 +11,10 @@
   <body>
     <main id="light-display" aria-describedby="connection-status">
       <canvas id="light-canvas" aria-hidden="true"></canvas>
+      <p id="wake-lock-status" class="sr-only" role="status" aria-live="polite">Asking your device to keep the screen awake.</p>
 
       <p id="connection-status" class="connection-status" role="status" aria-live="polite">
-        Connecting…
+        Connecting to your light…
       </p>
 
       <button
@@ -32,9 +33,8 @@
         <div class="overlay-card">
           <div class="overlay-heading">
             <div>
-              <p class="eyebrow">WebGlow display</p>
-              <h1 id="light-name">Loading light…</h1>
-              <p id="light-id" class="light-id"></p>
+              <p class="eyebrow">Your WebGlow light</p>
+              <h1 id="light-name">Getting your light ready…</h1>
             </div>
             <button id="overlay-close" class="close-button" type="button" aria-label="Close display information">
               ×
@@ -44,30 +44,19 @@
           <dl class="light-details">
             <div>
               <dt>Connection</dt>
-              <dd id="connection-detail">Connecting…</dd>
-            </div>
-            <div>
-              <dt>Output</dt>
-              <dd id="state-detail">—</dd>
-            </div>
-            <div>
-              <dt>Pattern</dt>
-              <dd id="pattern-detail">—</dd>
-            </div>
-            <div>
-              <dt>Last update</dt>
-              <dd id="updated-detail">—</dd>
+              <dd id="connection-detail">Connecting to your light…</dd>
             </div>
           </dl>
 
           <div class="overlay-actions">
             <button id="fullscreen-button" class="action-button" type="button">Enter fullscreen</button>
-            <button id="wake-lock-button" class="action-button" type="button">Keep screen awake</button>
+            <button id="leave-light-button" class="action-button leave-light-button" type="button" hidden>Leave and remove my light</button>
+            <p id="leave-light-message" class="leave-light-message" role="status" aria-live="polite"></p>
           </div>
 
           <div class="display-notes">
-            <p>Brightness changes the pixels shown here. Browsers cannot reliably change the device’s physical screen brightness.</p>
-            <p>For comfort and safety, strobe is limited to 0.5–3 Hz. Use the <kbd>i</kbd> button or press <kbd>H</kbd> to reopen this panel.</p>
+            <p>Keep this page open during the service. WebGlow automatically asks your device to keep the screen awake.</p>
+            <p class="display-credit">Created by Jeriel · “You, Lord, keep my lamp burning; my God turns my darkness into light.” <span>Psalm 18:28 (NIV)</span></p>
           </div>
         </div>
       </aside>
